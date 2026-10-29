@@ -1,0 +1,9 @@
+node_modules/
+out/
+dist/
+*.log
+
+# Local working notes, QA screenshots of real chats and the art pipeline stay off the public repo.
+AGENTS.md
+qa/
+docs/

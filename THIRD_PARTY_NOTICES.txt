@@ -1,0 +1,26 @@
+IV Chat
+(c) 2026 Infinite Variance. Released under the MIT licence.
+
+WhatsApp and Messenger appear in IV Chat as their own official websites
+(web.whatsapp.com and facebook.com). IV Chat is not made by or affiliated with
+WhatsApp, Meta or Telegram. Your use of each service follows that service's terms.
+
+IV Chat is built from the open-source software listed below. Full licence texts
+are in the "licenses" folder next to this file.
+
+------------------------------------------------------------------------------------
+Electron 44 and Chromium
+  Licence: MIT (Electron) and the Chromium licences
+  Licence text: LICENSE.electron.txt and LICENSES.chromium.html in the install folder
+  Source code: https://github.com/electron/electron
+
+electron-updater 6
+  Licence: MIT
+  Source code: https://github.com/electron-userland/electron-builder
+
+React and React DOM 19
+  Licence: MIT. licenses/React-MIT.txt
+
+Fonts: Barlow, DM Sans, JetBrains Mono
+  Licence: SIL Open Font License 1.1
+  licenses/Barlow-OFL.txt, licenses/DMSans-OFL.txt, licenses/JetBrainsMono-OFL.txt
