@@ -9,6 +9,7 @@ import { initUpdater, updateState } from './updater'
 import { TelegramService } from './telegram'
 import { MediaCache, SCHEME as MEDIA_SCHEME, mediaUrl } from './tg-media.js'
 import { webmToOgg } from './ogg-opus.js'
+import { countsAsUnread } from './tg-format.js'
 import { RateLimiter, setChatAccess } from './ai-access.js'
 import { createTools } from './mcp-tools.js'
 import { startMcpPipe } from './mcp-pipe'
@@ -132,7 +133,7 @@ function selectView(view) {
 
 // ---------- unread, tray and notifications ----------
 
-const telegramUnread = () => (telegram?.status === 'ready' ? telegram.dialogList().reduce((n, d) => n + (d.unread ? 1 : 0), 0) : 0)
+const telegramUnread = () => (telegram?.status === 'ready' ? telegram.dialogList().filter(countsAsUnread).length : 0)
 
 function refreshUnread() {
   if (!win || !tray) return
@@ -301,6 +302,11 @@ function registerIpc() {
   ipcMain.handle('telegram:chatInfo', (_e, id) => telegram.chatInfo(tgId(id)))
   ipcMain.handle('telegram:pinned', (_e, id) => telegram.pinned(tgId(id)))
   ipcMain.handle('telegram:avatar', (_e, id) => telegram.avatar(tgId(id)))
+  ipcMain.handle('telegram:folders', () => (telegram.status === 'ready' ? telegram.folderList() : []))
+  ipcMain.handle('telegram:findChats', (_e, query) => telegram.findChats(String(query ?? '').slice(0, 64)))
+  ipcMain.handle('telegram:openFound', (_e, id) => telegram.openFound(tgId(id)))
+  ipcMain.handle('telegram:details', (_e, id) => telegram.chatDetails(tgId(id)))
+  ipcMain.handle('telegram:shared', (_e, id, kind, beforeId) => telegram.sharedMedia(tgId(id), String(kind), Number(beforeId) || 0))
   ipcMain.handle('telegram:search', (_e, id, query) => telegram.search(String(query ?? '').slice(0, 200), tgId(id)))
   ipcMain.handle('telegram:mediaUrl', (_e, id, msgId) => mediaUrl(tgId(id), Number(msgId)))
   ipcMain.handle('telegram:markRead', (_e, id) => telegram.markRead(tgId(id)))
@@ -411,6 +417,23 @@ function registerIpc() {
   ipcMain.handle('telegram:forward', async (e, fromId, msgIds, toId) => {
     fromWindow(e)
     await telegram.forwardFromPerson(tgId(fromId), ids(msgIds), tgId(toId))
+  })
+  // The chat list's own actions, also only from the person's clicks.
+  ipcMain.handle('telegram:pinChat', async (e, id, pinned) => {
+    fromWindow(e)
+    await telegram.pinChatFromPerson(tgId(id), Boolean(pinned))
+  })
+  ipcMain.handle('telegram:mute', async (e, id, until) => {
+    fromWindow(e)
+    await telegram.muteFromPerson(tgId(id), until === 'forever' ? Infinity : Math.max(0, Number(until) || 0))
+  })
+  ipcMain.handle('telegram:archive', async (e, id, archived) => {
+    fromWindow(e)
+    await telegram.archiveFromPerson(tgId(id), Boolean(archived))
+  })
+  ipcMain.handle('telegram:markUnread', async (e, id, unread) => {
+    fromWindow(e)
+    await telegram.markUnreadFromPerson(tgId(id), Boolean(unread))
   })
   ipcMain.handle('telegram:pin', async (e, id, msgId, unpin) => {
     fromWindow(e)
@@ -627,6 +650,7 @@ function startTelegram() {
   })
   telegram.on('message', (id) => send('telegram:message', id))
   telegram.on('typing', (t) => send('telegram:typing', t))
+  telegram.on('folders', (f) => send('telegram:folders', f))
   telegram.on('status', (id) => send('telegram:status', id))
   telegram.on('incoming', ({ chat_id, name }) => {
     if (!settings.notifications) return

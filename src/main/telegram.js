@@ -11,7 +11,7 @@ import { NewMessage, Raw } from 'telegram/events/index.js'
 import { LogLevel } from 'telegram/extensions/Logger.js'
 import { deleteSecret, readSecret, writeSecret } from './secure-store'
 import { encodeWaveform } from './waveform.js'
-import { actionText, dialogName, entityList, linkPreview, mediaInfo, messageText, personName, reactionList, senderName, serviceText, statusText } from './tg-format.js'
+import { actionText, dialogName, entityList, folderRules, inFolder, linkPreview, mediaInfo, messageText, personName, reactionList, senderName, serviceText, statusText } from './tg-format.js'
 
 const KEYS = 'telegram-app'
 const SESSION = 'telegram-session'
@@ -36,6 +36,8 @@ export class TelegramService extends EventEmitter {
     this.passwordWaiter = null
     this.previews = new Map() // "chat:message" -> data URL of a photo or thumbnail, kept in memory
     this.avatars = new Map() // chat id -> Promise of a profile picture data URL (or null)
+    this.found = new Map() // chat id -> entity, from New chat searches
+    this.folders = []
   }
 
   // Only the fields the UI needs; never the session or keys.
@@ -161,7 +163,15 @@ export class TelegramService extends EventEmitter {
           Api.UpdateUserTyping,
           Api.UpdateChatUserTyping,
           Api.UpdateChannelUserTyping,
-          Api.UpdateUserStatus
+          Api.UpdateUserStatus,
+          Api.UpdateDialogPinned,
+          Api.UpdatePinnedDialogs,
+          Api.UpdateFolderPeers,
+          Api.UpdateNotifySettings,
+          Api.UpdateDialogUnreadMark,
+          Api.UpdateDialogFilter,
+          Api.UpdateDialogFilters,
+          Api.UpdateDialogFilterOrder
         ]
       })
     )
@@ -197,24 +207,38 @@ export class TelegramService extends EventEmitter {
   // ---------- reading ----------
 
   async refreshDialogs() {
-    const list = await this.client.getDialogs({ limit: 60 })
+    // Your main chats and your archive together, the way Telegram returns them: pinned first, then newest.
+    const list = await this.client.getDialogs({ limit: 150 })
     // Built off to the side and swapped in at the end, so chats never vanish mid-refresh.
     const next = new Map()
-    for (const d of list) {
-      if (d.archived) continue
+    const now = Date.now() / 1000
+    list.forEach((d, order) => {
+      const muteUntil = d.dialog?.notifySettings?.muteUntil || 0
       next.set(peerId(d.id), {
         id: peerId(d.id),
         // Your own chat is "Saved Messages", as in Telegram's apps.
         name: d.entity?.self ? 'Saved Messages' : dialogName(d),
         kind: d.entity?.self ? 'saved' : d.isUser ? 'person' : d.isChannel && !d.isGroup ? 'channel' : 'group',
         unread: d.unreadCount || 0,
+        unreadMark: Boolean(d.dialog?.unreadMark),
+        mentions: d.dialog?.unreadMentionsCount || 0,
         preview: d.message ? messageText(d.message) : '',
         at: d.message?.date ? d.message.date * 1000 : null,
+        pinned: Boolean(d.pinned),
+        order,
+        archived: Boolean(d.archived),
+        muted: muteUntil > now,
+        muteUntil: muteUntil > now ? muteUntil * 1000 : 0,
+        bot: Boolean(d.entity?.bot),
+        contact: Boolean(d.entity?.contact),
+        username: d.entity?.username || d.entity?.usernames?.find((u) => u.active)?.username || '',
         // Your messages up to this id have been read by the other side (for the double tick).
         readOut: d.dialog?.readOutboxMaxId || 0,
         entity: d.entity
       })
-    }
+    })
+    // Chats opened from search that don't have messages yet stay reachable until the next restart.
+    for (const [id, d] of this.dialogs) if (d.found && !next.has(id)) next.set(id, d)
     // Saved Messages is always reachable, as in Telegram Desktop, even when it isn't a recent chat.
     if (this.me && ![...next.values()].some((d) => d.kind === 'saved')) {
       try {
@@ -233,11 +257,39 @@ export class TelegramService extends EventEmitter {
       }
     }
     this.dialogs = next
+    await this.refreshFolders()
     this.emit('dialogs', this.dialogList())
   }
 
   dialogList() {
     return [...this.dialogs.values()].map(({ entity, ...rest }) => rest)
+  }
+
+  // Your Telegram folders ("Work", "Family"…) with the chats in each, worked out from the folder's rules.
+  async refreshFolders() {
+    try {
+      const res = await this.client.invoke(new Api.messages.GetDialogFilters())
+      const filters = (res.filters || res || []).filter((f) => f.className === 'DialogFilter' || f.className === 'DialogFilterChatlist')
+      this.folders = filters.map((f) => {
+        const rules = folderRules(f, (p) => utils.getPeerId(p))
+        const ids = [...this.dialogs.values()].filter((d) => inFolder(rules, d)).map((d) => d.id)
+        return { id: rules.id, title: rules.title, emoticon: rules.emoticon, pinned: rules.pinned, ids }
+      })
+    } catch {
+      this.folders = this.folders || []
+    }
+    this.emit('folders', this.folders)
+  }
+
+  folderList() {
+    return this.folders || []
+  }
+
+  // A refresh after something about the chat list changed (pinned, muted, archived, folders), coalesced so a
+  // burst of updates costs one reload.
+  softRefresh() {
+    clearTimeout(this.refreshTimer)
+    this.refreshTimer = setTimeout(() => this.refreshDialogs().catch(() => {}), 600)
   }
 
   entity(id) {
@@ -321,17 +373,139 @@ export class TelegramService extends EventEmitter {
     const key = peerId(id)
     if (!this.avatars.has(key)) {
       const d = this.dialogs.get(key)
-      const photo = d?.entity?.photo
+      // Chats from search results have their picture too, before they're opened.
+      const entity = d?.entity || this.found.get(key)
+      if (!entity) return Promise.resolve(null)
+      const photo = entity.photo
       const load =
-        !d || d.kind === 'saved' || !photo || /Empty$/.test(photo.className || '')
+        d?.kind === 'saved' || entity.self || !photo || /Empty$/.test(photo.className || '')
           ? Promise.resolve(null)
           : this.client
-              .downloadProfilePhoto(d.entity, { isBig: false })
+              .downloadProfilePhoto(entity, { isBig: false })
               .then((buf) => (Buffer.isBuffer(buf) && buf.length ? `data:image/jpeg;base64,${buf.toString('base64')}` : null))
               .catch(() => null)
       this.avatars.set(key, load)
     }
     return this.avatars.get(key)
+  }
+
+  // ---------- the chat list: pin, mute, archive, unread ----------
+  // Each is called only from the person's own click in the IV Chat window (see index.js).
+
+  async pinChatFromPerson(id, pinned) {
+    await this.client.invoke(new Api.messages.ToggleDialogPin({ peer: new Api.InputDialogPeer({ peer: this.entity(id) }), pinned: Boolean(pinned) }))
+    this.softRefresh()
+  }
+
+  // `until` is a time in milliseconds, 0 to unmute, or Infinity for "until I turn it back on".
+  async muteFromPerson(id, until) {
+    const muteUntil = until === 0 ? 0 : !Number.isFinite(until) ? 2147483647 : Math.floor(until / 1000)
+    await this.client.invoke(new Api.account.UpdateNotifySettings({ peer: new Api.InputNotifyPeer({ peer: this.entity(id) }), settings: new Api.InputPeerNotifySettings({ muteUntil }) }))
+    this.softRefresh()
+  }
+
+  async archiveFromPerson(id, archived) {
+    await this.client.invoke(new Api.folders.EditPeerFolders({ folderPeers: [new Api.InputFolderPeer({ peer: this.entity(id), folderId: archived ? 1 : 0 })] }))
+    this.softRefresh()
+  }
+
+  async markUnreadFromPerson(id, unread) {
+    const d = this.dialogs.get(peerId(id))
+    if (!unread) {
+      await this.markRead(id)
+      if (d?.unreadMark) await this.client.invoke(new Api.messages.MarkDialogUnread({ peer: new Api.InputDialogPeer({ peer: this.entity(id) }), unread: false }))
+    } else {
+      await this.client.invoke(new Api.messages.MarkDialogUnread({ peer: new Api.InputDialogPeer({ peer: this.entity(id) }), unread: true }))
+    }
+    if (d) d.unreadMark = Boolean(unread)
+    this.emit('dialogs', this.dialogList())
+  }
+
+  // ---------- finding people and chats ----------
+
+  // Your contacts and public people, groups and channels matching a name or @username (for New chat).
+  async findChats(query) {
+    const q = String(query || '').trim().replace(/^@/, '')
+    if (q.length < 2) return []
+    const res = await this.client.invoke(new Api.contacts.Search({ q, limit: 30 }))
+    const mine = new Set([...(res.myResults || [])].map((p) => peerId(utils.getPeerId(p))))
+    const out = []
+    for (const e of [...(res.users || []), ...(res.chats || [])]) {
+      if (e.className === 'ChatForbidden' || e.className === 'ChannelForbidden' || e.deleted) continue
+      const id = peerId(utils.getPeerId(e))
+      this.found.set(id, e)
+      const kind = e.className === 'User' ? (e.self ? 'saved' : 'person') : e.className === 'Channel' && e.broadcast ? 'channel' : 'group'
+      out.push({ id, name: e.self ? 'Saved Messages' : personName(e), kind, username: e.username || '', mine: mine.has(id) || Boolean(e.contact), members: e.participantsCount || 0, open: this.dialogs.has(id) })
+    }
+    // Your own contacts and chats first.
+    return out.sort((a, b) => Number(b.mine) - Number(a.mine))
+  }
+
+  // Makes a chat found by search available to open, even before it has any messages.
+  openFound(id) {
+    const key = peerId(id)
+    if (this.dialogs.has(key)) return this.dialogs.get(key).id
+    const e = this.found.get(key)
+    if (!e) throw new Error('Search again to open that chat')
+    const kind = e.className === 'User' ? 'person' : e.className === 'Channel' && e.broadcast ? 'channel' : 'group'
+    this.dialogs.set(key, { id: key, name: personName(e), kind, unread: 0, preview: '', at: null, pinned: false, archived: false, muted: false, bot: Boolean(e.bot), contact: Boolean(e.contact), username: e.username || '', readOut: 0, found: true, entity: e })
+    this.emit('dialogs', this.dialogList())
+    return key
+  }
+
+  // ---------- the chat info panel ----------
+
+  // Everything the info panel shows about a chat: its about text, @username, phone (for your contacts),
+  // member count, and how many photos, videos, files, links and voice messages it has.
+  async chatDetails(id) {
+    const d = this.dialogs.get(peerId(id))
+    if (!d) return null
+    const entity = d.entity
+    // `found`: opened from search and not one of your chats, so pin, mute and archive don't apply.
+    const out = { id: d.id, name: d.name, kind: d.kind, username: d.username, muted: d.muted, muteUntil: d.muteUntil, pinned: d.pinned, archived: d.archived, found: Boolean(d.found) }
+    try {
+      if (d.kind === 'person' || d.kind === 'saved') {
+        const full = await this.client.invoke(new Api.users.GetFullUser({ id: entity }))
+        out.about = full.fullUser?.about || ''
+        const u = full.users?.[0]
+        if (u?.phone && d.kind !== 'saved') out.phone = `+${u.phone}`
+        out.subtitle = (await this.chatInfo(id)).subtitle
+      } else if (entity.className === 'Channel') {
+        const full = await this.client.invoke(new Api.channels.GetFullChannel({ channel: entity }))
+        out.about = full.fullChat?.about || ''
+        out.members = full.fullChat?.participantsCount || entity.participantsCount || 0
+        out.online = full.fullChat?.onlineCount || 0
+      } else {
+        const full = await this.client.invoke(new Api.messages.GetFullChat({ chatId: entity.id }))
+        out.about = full.fullChat?.about || ''
+        out.members = full.fullChat?.participants?.participants?.length || entity.participantsCount || 0
+      }
+    } catch {
+      /* the panel shows what it has */
+    }
+    try {
+      const kinds = [new Api.InputMessagesFilterPhotoVideo(), new Api.InputMessagesFilterDocument(), new Api.InputMessagesFilterUrl(), new Api.InputMessagesFilterRoundVoice()]
+      const counts = await this.client.invoke(new Api.messages.GetSearchCounters({ peer: entity, filters: kinds }))
+      const [media, files, links, voice] = counts.map((c) => c.count || 0)
+      out.counts = { media, files, links, voice }
+    } catch {
+      out.counts = null
+    }
+    return out
+  }
+
+  // A page of a chat's shared photos and videos, files, links or voice messages, newest first.
+  async sharedMedia(id, kind, beforeId) {
+    const filter = {
+      media: new Api.InputMessagesFilterPhotoVideo(),
+      files: new Api.InputMessagesFilterDocument(),
+      links: new Api.InputMessagesFilterUrl(),
+      voice: new Api.InputMessagesFilterRoundVoice()
+    }[kind]
+    if (!filter) throw new Error('Unknown kind of shared media')
+    const list = await this.client.getMessages(this.entity(id), { limit: 40, filter, offsetId: Number(beforeId) || 0 })
+    const d = this.dialogs.get(peerId(id))
+    return list.map((m) => this.item(m, null, d))
   }
 
   // The most recent pinned message in a chat, for the bar at the top of the conversation.
@@ -393,6 +567,16 @@ export class TelegramService extends EventEmitter {
         }
         return this.emit('typing', { chatId, text: text ? (name ? `${name} is ${text}` : text) : null, until: text ? Date.now() + TYPING_MS : 0 })
       }
+      case 'UpdateDialogPinned':
+      case 'UpdatePinnedDialogs':
+      case 'UpdateFolderPeers':
+      case 'UpdateNotifySettings':
+      case 'UpdateDialogUnreadMark':
+      case 'UpdateDialogFilter':
+      case 'UpdateDialogFilters':
+      case 'UpdateDialogFilterOrder':
+        // Something about the chat list changed, here or in another Telegram app.
+        return this.softRefresh()
       default:
     }
   }
@@ -499,9 +683,11 @@ export class TelegramService extends EventEmitter {
       this.refreshDialogs().catch(() => {})
     }
     if (!m.out) {
+      // Muted and archived chats don't notify, as in Telegram.
+      const quiet = d?.muted || d?.archived
       this.updates.push({ chat_id: id, id: m.id, from: senderName(m, this.me), text: messageText(m), at: m.date * 1000 })
       if (this.updates.length > MAX_UPDATES) this.updates.splice(0, this.updates.length - MAX_UPDATES)
-      this.emit('incoming', { chat_id: id, name: d?.name || '' })
+      if (!quiet) this.emit('incoming', { chat_id: id, name: d?.name || '' })
     }
     this.emit('dialogs', this.dialogList())
     this.emit('message', id)

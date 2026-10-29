@@ -34,6 +34,11 @@ replies, but nothing is ever sent for you: a message only goes when you press En
   - Record and send voice messages, play them with a waveform player, react with emoji, and send pictures
     and files by picking, dropping or pasting them.
   - Real profile pictures for people, groups and channels.
+  - Your chat list as in Telegram: your folders as tabs, pinned chats first, archived chats behind their own
+    row, muted chats marked, and a right-click menu to pin, mute, mark read or unread, and archive.
+  - Search your chats, people and public groups and channels in one box, or start a New chat.
+  - A chat info panel with the about text, @username and member count, and the chat's shared photos and
+    videos, files, links and voice messages.
 - **Room to work.** The sidebar collapses to a column of round logo buttons with their unread counts.
 - **Draft reply.** A button above every chat writes a reply with the Codex app or Claude Code already on
   your PC. Add a few words about what you want to say if you like. The draft lands in the reply box for

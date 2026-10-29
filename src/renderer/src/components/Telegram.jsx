@@ -4,17 +4,11 @@ import Hero from './Hero'
 import { TelegramAvatar } from './Avatar'
 import RichText from './tg/RichText'
 import VoiceRecorder from './tg/VoiceRecorder'
+import ChatList, { shortTime } from './tg/ChatList'
+import InfoPanel from './tg/InfoPanel'
 import { LinkCard, Media, PhotoViewer, SafeMessage, formatSize } from './tg/TgMedia'
 
-export function shortTime(at) {
-  if (!at) return ''
-  const d = new Date(at)
-  const now = new Date()
-  if (d.toDateString() === now.toDateString()) return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
-  const days = (now - d) / 86400e3
-  if (days < 7) return d.toLocaleDateString([], { weekday: 'short' })
-  return d.toLocaleDateString([], { month: 'short', day: 'numeric' })
-}
+export { shortTime }
 
 function Shell({ title, accent, children }) {
   return (
@@ -464,6 +458,7 @@ function Conversation({ dialog, dialogs, ai, draft, onToggleAi, refreshTick }) {
   const [results, setResults] = useState(null)
   const [dragging, setDragging] = useState(false)
   const [recording, setRecording] = useState(false)
+  const [infoOpen, setInfoOpen] = useState(false)
   const inputRef = useRef(null)
   const listRef = useRef(null)
   const stick = useRef(true)
@@ -867,13 +862,18 @@ function Conversation({ dialog, dialogs, ai, draft, onToggleAi, refreshTick }) {
       }}
     >
       <header className="convo-head">
-        <TelegramAvatar dialog={dialog} size={42} />
-        <div className="convo-who">
+        <button type="button" className="convo-who-btn" onClick={() => setInfoOpen((v) => !v)} title="Chat info" aria-label={`About ${dialog.name}`}>
+          <TelegramAvatar dialog={dialog} size={42} />
+        </button>
+        <div className="convo-who" onClick={() => setInfoOpen((v) => !v)} role="button" tabIndex={0} onKeyDown={(e) => e.key === 'Enter' && setInfoOpen((v) => !v)}>
           <h2 className="convo-name">{dialog.name}</h2>
           {typing ? <span className="mono typing">{typing.text}…</span> : <span className={`mono dim${info.subtitle === 'online' ? ' is-online' : ''}`}>{info.subtitle || dialog.kind}</span>}
         </div>
         <button type="button" className={`btn btn-quiet head-btn${searchOpen ? ' is-on' : ''}`} onClick={() => setSearchOpen((v) => !v)} title="Search this chat" aria-label="Search this chat">
           ⌕
+        </button>
+        <button type="button" className={`btn btn-quiet head-btn${infoOpen ? ' is-on' : ''}`} onClick={() => setInfoOpen((v) => !v)} title="Chat info, shared media and files" aria-label="Chat info">
+          ⓘ
         </button>
         <label className="toggle toggle-inline" title="Whether your AI (Codex or Claude) can read this chat and draft replies">
           <span className="toggle-label small">AI can see this chat</span>
@@ -1068,47 +1068,29 @@ function Conversation({ dialog, dialogs, ai, draft, onToggleAi, refreshTick }) {
       {menu && <MessageMenu at={menu.at} m={menu.m} dialog={dialog} onClose={() => setMenu(null)} onAction={onAction} />}
       {confirmDelete && <DeleteDialog count={confirmDelete.ids.length} dialog={dialog} outgoing={confirmDelete.outgoing} onConfirm={doDelete} onClose={() => setConfirmDelete(null)} />}
       {forwarding && <ForwardDialog dialogs={dialogs} onPick={doForward} onClose={() => setForwarding(null)} />}
+      {infoOpen && <InfoPanel dialog={dialog} onClose={() => setInfoOpen(false)} onJump={jumpTo} onOpenPhoto={setViewer} onError={setError} />}
       {viewer && <PhotoViewer dialogId={dialog.id} msgId={viewer.msgId} preview={viewer.preview} onClose={() => setViewer(null)} />}
     </div>
   )
 }
 
 function Chats({ dialogs, ai, drafts, openId, setOpenId, onToggleAi, refreshTick }) {
-  const sorted = [...dialogs].sort((a, b) => (b.at ?? 0) - (a.at ?? 0))
-  const open = sorted.find((d) => d.id === openId)
+  const [listError, setListError] = useState(null)
+  const open = dialogs.find((d) => d.id === openId)
+  useEffect(() => {
+    if (!listError) return
+    const t = setTimeout(() => setListError(null), 5000)
+    return () => clearTimeout(t)
+  }, [listError])
   return (
     <div className="tg">
-      <ul className="tg-list" aria-label="Telegram chats">
-        {sorted.map((d) => {
-          const key = chatKey('telegram', d.id)
-          return (
-            <li key={d.id}>
-              <button type="button" className={`tg-item${d.id === openId ? ' is-active' : ''}`} onClick={() => setOpenId(d.id)}>
-                <TelegramAvatar dialog={d} />
-                <span className="tg-main">
-                  <span className={`latest-name${d.unread ? ' is-unread' : ''}`}>
-                    {d.name}
-                    {aiCanSee(ai, key) && <span className="ai-dot" title="Your AI can see this chat" />}
-                  </span>
-                  <span className="latest-preview dim">
-                    {drafts[key] ? <span className="accent">Draft: </span> : null}
-                    {drafts[key] || d.preview}
-                  </span>
-                </span>
-                <span className="latest-meta">
-                  <span className="mono dim">{shortTime(d.at)}</span>
-                  {d.unread > 0 && <span className="latest-badge">{d.unread}</span>}
-                </span>
-              </button>
-            </li>
-          )
-        })}
-      </ul>
+      <ChatList dialogs={dialogs} ai={ai} drafts={drafts} openId={openId} onOpen={setOpenId} onError={setListError} />
       {open ? (
         <Conversation key={open.id} dialog={open} dialogs={dialogs} ai={ai} draft={drafts[chatKey('telegram', open.id)]} onToggleAi={onToggleAi} refreshTick={refreshTick} />
       ) : (
         <div className="convo convo-empty dim">Choose a chat.</div>
       )}
+      {listError && <p className="error tg-toast">{listError}</p>}
     </div>
   )
 }

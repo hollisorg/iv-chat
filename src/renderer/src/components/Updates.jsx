@@ -1,4 +1,5 @@
 import { latestAcross } from '../../../main/services'
+import { countsAsUnread } from '../../../main/tg-format.js'
 import { NAMES, READS_CHATS } from '../views'
 import { shortTime } from './Telegram'
 import Hero from './Hero'
@@ -49,7 +50,7 @@ function serviceNote(service, chats) {
 
 function LatestMessages({ services, chats, telegram, enabled, onSelect, onOpenTelegram }) {
   const tgReady = telegram.state?.status === 'ready'
-  const tgChats = tgReady ? telegram.dialogs.map((d) => ({ id: d.id, name: d.name, preview: d.preview, at: d.at, time: shortTime(d.at), unread: d.unread })) : []
+  const tgChats = tgReady ? telegram.dialogs.filter((d) => !d.archived).map((d) => ({ id: d.id, name: d.name, kind: d.kind, preview: d.preview, at: d.at, time: shortTime(d.at), unread: d.muted ? 0 : d.unread })) : []
   // Telegram comes straight from Telegram, so it shows even when reading the website panels is turned off.
   const ready = enabled ? services.filter((s) => s.enabled && chats[s.id]?.status === 'ok') : []
   const items = latestAcross({ telegram: tgChats, ...Object.fromEntries(ready.map((s) => [s.id, chats[s.id].chats])) })
@@ -101,7 +102,7 @@ const TG_STATUS = { ready: 'Connected', 'needs-keys': 'Not set up', 'signed-out'
 
 export default function Updates({ services, chats, telegram, latestEnabled, onSelect, onOpenTelegram }) {
   const tg = telegram.state
-  const tgUnread = tg?.status === 'ready' ? telegram.dialogs.filter((d) => d.unread > 0).length : 0
+  const tgUnread = tg?.status === 'ready' ? telegram.dialogs.filter(countsAsUnread).length : 0
   return (
     <section className="page" aria-label="Updates">
       <Hero title="What's" accent="new." kicker="Every chat · one place" />

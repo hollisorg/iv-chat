@@ -40,7 +40,7 @@ export function useTelegramPicture(chatId) {
     if (p === undefined) {
       p = window.iv.telegram.avatar(chatId).catch(() => null)
       pictures.set(chatId, p)
-      p.then((url) => pictures.set(chatId, url))
+      p.then((url) => (url ? pictures.set(chatId, url) : pictures.delete(chatId)))
     }
     Promise.resolve(p).then((url) => live && setSrc(url || null))
     return () => {

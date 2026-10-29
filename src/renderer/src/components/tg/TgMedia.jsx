@@ -52,7 +52,7 @@ export class SafeMessage extends Component {
 }
 
 // The small preview picture Telegram keeps for a photo, video, sticker or link (loaded once, kept in memory).
-function usePreview(dialogId, msgId, wanted) {
+export function usePreview(dialogId, msgId, wanted) {
   const [src, setSrc] = useState(null)
   useEffect(() => {
     if (!wanted) return

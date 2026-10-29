@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { countsAsUnread } from '../../main/tg-format.js'
 import Rail from './components/Rail'
 import PanelHost from './components/PanelHost'
 import Updates from './components/Updates'
@@ -90,7 +91,7 @@ export default function App() {
   }, [])
 
   const panel = services.find((s) => s.id === view)
-  const tgUnread = tgState?.status === 'ready' ? tgDialogs.filter((d) => d.unread > 0).length : 0
+  const tgUnread = tgState?.status === 'ready' ? tgDialogs.filter(countsAsUnread).length : 0
   const totalUnread = services.reduce((sum, s) => sum + (s.enabled ? s.unread : 0), 0) + tgUnread
   const ai = aiState?.ai ?? settings?.ai ?? { enabled: true, mode: 'chosen', allowed: [], excluded: [] }
 

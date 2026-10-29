@@ -269,3 +269,51 @@ export function actionText(action) {
   }
   return map[action?.className] || null
 }
+
+// ---------- chat folders ----------
+
+// A Telegram folder ("dialog filter") reduced to the rules IV Chat needs. Peer ids are strings.
+export function folderRules(filter, peerIdOf) {
+  const ids = (list) => new Set((list || []).map((p) => { try { return String(peerIdOf(p)) } catch { return null } }).filter(Boolean))
+  const title = typeof filter.title === 'string' ? filter.title : filter.title?.text || 'Folder'
+  return {
+    id: filter.id,
+    title,
+    emoticon: filter.emoticon || '',
+    pinned: [...ids(filter.pinnedPeers)],
+    include: ids([...(filter.pinnedPeers || []), ...(filter.includePeers || [])]),
+    exclude: ids(filter.excludePeers),
+    contacts: Boolean(filter.contacts),
+    nonContacts: Boolean(filter.nonContacts),
+    groups: Boolean(filter.groups),
+    broadcasts: Boolean(filter.broadcasts),
+    bots: Boolean(filter.bots),
+    excludeMuted: Boolean(filter.excludeMuted),
+    excludeRead: Boolean(filter.excludeRead),
+    excludeArchived: Boolean(filter.excludeArchived)
+  }
+}
+
+// Whether a chat belongs in a folder, the way Telegram decides: chats named in the folder always do;
+// otherwise its kind has to be one the folder takes, and it mustn't be muted, read or archived if the folder
+// leaves those out. `d` is { id, kind, bot, contact, muted, unread, unreadMark, archived }.
+export function inFolder(rules, d) {
+  if (rules.include.has(d.id)) return true
+  if (rules.exclude.has(d.id)) return false
+  let kindOk
+  if (d.kind === 'person') kindOk = d.bot ? rules.bots : d.contact ? rules.contacts : rules.nonContacts
+  else if (d.kind === 'group') kindOk = rules.groups
+  else if (d.kind === 'channel') kindOk = rules.broadcasts
+  else kindOk = false
+  if (!kindOk) return false
+  if (rules.excludeMuted && d.muted) return false
+  if (rules.excludeRead && !d.unread && !d.unreadMark) return false
+  if (rules.excludeArchived && d.archived) return false
+  return true
+}
+
+// Whether a chat adds to the unread count on the tray, the sidebar and Updates. As in Telegram, muted and
+// archived chats don't, and a chat marked unread does.
+export function countsAsUnread(d) {
+  return Boolean((d.unread > 0 || d.unreadMark) && !d.muted && !d.archived)
+}
