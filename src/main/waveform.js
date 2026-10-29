@@ -34,3 +34,17 @@ export function waveformBars(values, bars = 44, seed = 1) {
   }
   return out
 }
+
+// The other way round, for sending a voice message: loudness values (0 to 31) packed as 5 bits each.
+export function encodeWaveform(values) {
+  const list = values.map((v) => Math.max(0, Math.min(31, Math.round(v))))
+  const out = new Uint8Array(Math.ceil((list.length * 5) / 8))
+  list.forEach((v, i) => {
+    const bit = i * 5
+    const byte = bit >> 3
+    const shift = bit & 7
+    out[byte] |= (v << shift) & 0xff
+    if (shift > 3) out[byte + 1] |= v >> (8 - shift)
+  })
+  return out
+}

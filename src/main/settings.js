@@ -16,6 +16,8 @@ const defaults = () => ({
   launchAtLogin: false,
   // Shown once, the first time the window hides to the tray.
   trayHintShown: false,
+  // The sidebar shrunk to round logo buttons.
+  navCollapsed: false,
   // What the person's AI may see through the MCP (see ai-access.js).
   ai: { ...AI_DEFAULTS },
   // How the person likes their replies written; goes into the starter message for Codex or Claude.
@@ -47,7 +49,7 @@ export function loadSettings() {
 // Per-chat AI access is changed through setChatAccess (index.js), not here.
 export function applyPatch(current, patch) {
   const next = structuredClone(current)
-  for (const key of ['notifications', 'latestMessages', 'closeToTray', 'launchAtLogin', 'trayHintShown']) {
+  for (const key of ['notifications', 'latestMessages', 'closeToTray', 'launchAtLogin', 'trayHintShown', 'navCollapsed']) {
     if (typeof patch?.[key] === 'boolean') next[key] = patch[key]
   }
   for (const id of PANEL_IDS) {

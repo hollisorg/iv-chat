@@ -5,7 +5,7 @@
 import { Menu, WebContentsView, clipboard, dialog, session, shell } from 'electron'
 import { EventEmitter } from 'node:events'
 import path from 'node:path'
-import { SERVICES, PANEL_IDS, READS_CHATS, chromeUserAgent, hostAllowed, parseUnread } from './services'
+import { SERVICES, PANEL_IDS, READS_CHATS, chromeUserAgent, hostAllowed, parseUnread, popupAllowed } from './services'
 
 // Chromium's code for a navigation that was replaced by another one; not a real failure.
 const ERR_ABORTED = -3
@@ -179,7 +179,7 @@ export class Panels extends EventEmitter {
     wc.on('will-navigate', (e) => guard(e, e.url))
     wc.on('will-redirect', (e) => guard(e, e.url, e.isMainFrame))
     wc.setWindowOpenHandler(({ url }) => {
-      if (hostAllowed(service, url)) {
+      if (popupAllowed(service, url)) {
         // Calls and sign-in pop-ups stay inside the same signed-in session.
         return {
           action: 'allow',
@@ -199,6 +199,20 @@ export class Panels extends EventEmitter {
       }
       if (/^https?:\/\//i.test(url)) shell.openExternal(url)
       return { action: 'deny' }
+    })
+    // A pop-up kept in IV Chat may move between the site and its sign-in pages. If it heads anywhere else
+    // (an ordinary link opened through a blank window), that goes to the default browser instead, and a
+    // pop-up left with nothing in it closes.
+    wc.on('did-create-window', (child) => {
+      const popupGuard = (e, url) => {
+        if (popupAllowed(service, url)) return
+        e.preventDefault()
+        if (/^https?:\/\//i.test(url)) shell.openExternal(url)
+        const blank = child.webContents.getURL()
+        if (!blank || blank === 'about:blank') child.close()
+      }
+      child.webContents.on('will-navigate', (e) => popupGuard(e, e.url))
+      child.webContents.on('will-redirect', (e) => e.isMainFrame && popupGuard(e, e.url))
     })
 
     wc.on('context-menu', (_e, p) => this.contextMenu(wc, p))

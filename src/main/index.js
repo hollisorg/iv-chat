@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, Notification, Tray, clipboard, dialog, ipcMain, nativeImage, shell } from 'electron'
+import { app, BrowserWindow, Menu, Notification, Tray, clipboard, dialog, ipcMain, nativeImage, protocol, shell } from 'electron'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -7,6 +7,8 @@ import { SERVICES, PANEL_IDS, sanitizeChats, totalUnread } from './services'
 import { applyPatch, loadSettings, saveSettings } from './settings'
 import { initUpdater, updateState } from './updater'
 import { TelegramService } from './telegram'
+import { MediaCache, SCHEME as MEDIA_SCHEME, mediaUrl } from './tg-media.js'
+import { webmToOgg } from './ogg-opus.js'
 import { RateLimiter, setChatAccess } from './ai-access.js'
 import { createTools } from './mcp-tools.js'
 import { startMcpPipe } from './mcp-pipe'
@@ -17,6 +19,10 @@ import { flattenDraft } from './whatsapp-parse.js'
 
 // Tests run against a throwaway profile so they never touch real sign-ins (scripts/smoke-test.mjs).
 if (process.env.IV_CHAT_PROFILE) app.setPath('userData', process.env.IV_CHAT_PROFILE)
+
+// ivtg:// carries Telegram videos, GIFs and full photos to the window's own players (tg-media.js). It has to be
+// declared before the app is ready so <video> can stream from it and seek.
+protocol.registerSchemesAsPrivileged([{ scheme: MEDIA_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, corsEnabled: true } }])
 
 // One IV Chat at a time; opening it again brings the existing window forward.
 if (!app.requestSingleInstanceLock()) app.quit()
@@ -73,7 +79,8 @@ function createWindow() {
 
   // The app's own UI never navigates; external links open in the real browser.
   win.webContents.setWindowOpenHandler(({ url }) => {
-    if (/^https?:\/\//.test(url)) shell.openExternal(url)
+    // Links in messages: web pages, e-mail addresses and Telegram's own tg:// links.
+    if (/^(https?:\/\/|mailto:|tg:\/\/)/i.test(url)) shell.openExternal(url)
     return { action: 'deny' }
   })
   win.webContents.on('will-navigate', (e, url) => {
@@ -288,7 +295,14 @@ function registerIpc() {
   })
   ipcMain.handle('telegram:password', (_e, pw) => telegram.submitPassword(pw))
   ipcMain.handle('telegram:cancel', () => telegram.cancelSignIn())
-  ipcMain.handle('telegram:messages', (_e, id, opts) => telegram.messages(tgId(id), { limit: 40, beforeId: Number(opts?.beforeId) || 0 }))
+  ipcMain.handle('telegram:messages', (_e, id, opts) =>
+    telegram.messages(tgId(id), { limit: 40, beforeId: Number(opts?.beforeId) || 0, aroundId: Number(opts?.aroundId) || 0 })
+  )
+  ipcMain.handle('telegram:chatInfo', (_e, id) => telegram.chatInfo(tgId(id)))
+  ipcMain.handle('telegram:pinned', (_e, id) => telegram.pinned(tgId(id)))
+  ipcMain.handle('telegram:avatar', (_e, id) => telegram.avatar(tgId(id)))
+  ipcMain.handle('telegram:search', (_e, id, query) => telegram.search(String(query ?? '').slice(0, 200), tgId(id)))
+  ipcMain.handle('telegram:mediaUrl', (_e, id, msgId) => mediaUrl(tgId(id), Number(msgId)))
   ipcMain.handle('telegram:markRead', (_e, id) => telegram.markRead(tgId(id)))
   ipcMain.handle('telegram:preview', (_e, id, msgId) => telegram.preview(tgId(id), Number(msgId)))
   // Reacting, like sending, is accepted only from IV Chat's own window: the person's click. The AI can't react.
@@ -321,21 +335,86 @@ function registerIpc() {
     pickedFiles.set(token, filePath)
     return { token, name: path.basename(filePath), size, image: /\.(png|jpe?g|gif|webp)$/i.test(filePath) }
   })
-  ipcMain.handle('telegram:sendFile', async (e, id, token, caption) => {
+  // Files dropped on the chat or pasted into it: like the picker, the window gets a token and the file stays here.
+  const stage = (filePath, name) => {
+    const size = fs.statSync(filePath).size
+    if (size > 2000 * 1024 * 1024) throw new Error('Telegram files can be up to 2 GB')
+    const token = crypto.randomUUID()
+    pickedFiles.set(token, filePath)
+    return { token, name: name || path.basename(filePath), size, image: /\.(png|jpe?g|gif|webp)$/i.test(name || filePath) }
+  }
+  // A voice message recorded in the window (WebM Opus), rewrapped as OGG Opus and sent. Only the person's
+  // own click in this window can do this.
+  ipcMain.handle('telegram:sendVoice', async (e, id, bytes, waveform, opts) => {
+    if (e.sender !== win?.webContents) throw new Error('Not allowed')
+    const webm = Buffer.from(bytes)
+    if (!webm.length || webm.length > 20 * 1024 * 1024) throw new Error('That recording is too long to send')
+    const { ogg, seconds } = webmToOgg(webm)
+    const dir = path.join(app.getPath('temp'), 'iv-chat-uploads')
+    fs.mkdirSync(dir, { recursive: true })
+    const filePath = path.join(dir, `voice-${crypto.randomUUID()}.ogg`)
+    fs.writeFileSync(filePath, ogg)
+    try {
+      const levels = Array.isArray(waveform) ? waveform.slice(0, 100).map(Number).filter(Number.isFinite) : []
+      await telegram.sendVoiceFromPerson(tgId(id), filePath, { seconds, waveform: levels, replyTo: Number(opts?.replyTo) || 0 })
+    } finally {
+      fs.rm(filePath, { force: true }, () => {})
+    }
+    delete aiDrafts[`telegram:${tgId(id)}`]
+  })
+  ipcMain.handle('telegram:stagePath', (e, filePath) => {
+    if (e.sender !== win?.webContents) throw new Error('Not allowed')
+    const p = String(filePath || '')
+    if (!path.isAbsolute(p) || !fs.existsSync(p) || !fs.statSync(p).isFile()) throw new Error("That file can't be sent")
+    return stage(p)
+  })
+  ipcMain.handle('telegram:stageBytes', (e, name, bytes) => {
+    if (e.sender !== win?.webContents) throw new Error('Not allowed')
+    const buf = Buffer.from(bytes)
+    if (!buf.length || buf.length > 50 * 1024 * 1024) throw new Error('Pasted pictures can be up to 50 MB')
+    const safe = String(name || 'pasted.png').replace(/[^\w.-]/g, '_').slice(0, 80)
+    const dir = path.join(app.getPath('temp'), 'iv-chat-uploads')
+    fs.mkdirSync(dir, { recursive: true })
+    const filePath = path.join(dir, `${crypto.randomUUID()}-${safe}`)
+    fs.writeFileSync(filePath, buf)
+    return stage(filePath, safe)
+  })
+  ipcMain.handle('telegram:sendFile', async (e, id, token, caption, opts) => {
     if (e.sender !== win?.webContents) throw new Error('Not allowed')
     const filePath = pickedFiles.get(token)
     if (!filePath) throw new Error('Pick the file again')
     pickedFiles.delete(token)
-    await telegram.sendFileFromPerson(tgId(id), filePath, caption)
+    await telegram.sendFileFromPerson(tgId(id), filePath, caption, { replyTo: Number(opts?.replyTo) || 0 })
     delete aiDrafts[`telegram:${tgId(id)}`]
   })
   ipcMain.handle('telegram:refresh', () => telegram.refreshDialogs())
   // Sending exists only here: a request from IV Chat's own window, made by the person pressing Enter or Send.
   // The MCP has no way to reach it.
-  ipcMain.handle('telegram:send', async (e, id, text) => {
+  ipcMain.handle('telegram:send', async (e, id, text, opts) => {
     if (e.sender !== win?.webContents) throw new Error('Not allowed')
-    await telegram.sendFromPerson(tgId(id), String(text ?? '').slice(0, 4096))
+    await telegram.sendFromPerson(tgId(id), String(text ?? '').slice(0, 4096), { replyTo: Number(opts?.replyTo) || 0 })
     delete aiDrafts[`telegram:${tgId(id)}`]
+  })
+  // Editing, deleting, forwarding and pinning: like sending, only from the person's own clicks in this window.
+  const fromWindow = (e) => {
+    if (e.sender !== win?.webContents) throw new Error('Not allowed')
+  }
+  const ids = (list) => (Array.isArray(list) ? list : [list]).map(Number).filter((n) => Number.isInteger(n) && n > 0).slice(0, 100)
+  ipcMain.handle('telegram:edit', async (e, id, msgId, text) => {
+    fromWindow(e)
+    await telegram.editFromPerson(tgId(id), Number(msgId), String(text ?? '').slice(0, 4096))
+  })
+  ipcMain.handle('telegram:delete', async (e, id, msgIds, everyone) => {
+    fromWindow(e)
+    await telegram.deleteFromPerson(tgId(id), ids(msgIds), Boolean(everyone))
+  })
+  ipcMain.handle('telegram:forward', async (e, fromId, msgIds, toId) => {
+    fromWindow(e)
+    await telegram.forwardFromPerson(tgId(fromId), ids(msgIds), tgId(toId))
+  })
+  ipcMain.handle('telegram:pin', async (e, id, msgId, unpin) => {
+    fromWindow(e)
+    await telegram.pinFromPerson(tgId(id), Number(msgId), Boolean(unpin))
   })
   ipcMain.handle('telegram:signOut', async () => {
     const { response } = await dialog.showMessageBox(win, {
@@ -547,6 +626,8 @@ function startTelegram() {
     refreshUnread()
   })
   telegram.on('message', (id) => send('telegram:message', id))
+  telegram.on('typing', (t) => send('telegram:typing', t))
+  telegram.on('status', (id) => send('telegram:status', id))
   telegram.on('incoming', ({ chat_id, name }) => {
     if (!settings.notifications) return
     if (win.isVisible() && win.isFocused() && activeView === 'telegram') return
@@ -566,6 +647,8 @@ app.on('second-instance', showWindow)
 app.whenReady().then(() => {
   settings = loadSettings()
   startTelegram()
+  const media = new MediaCache(path.join(app.getPath('temp'), 'iv-chat-media'), (chatId, msgId) => telegram.mediaSource(String(chatId).slice(0, 40), msgId))
+  protocol.handle(MEDIA_SCHEME, (request) => media.respond(request))
   registerIpc()
   createWindow()
   createTray()

@@ -2,7 +2,7 @@ import { latestAcross } from '../../../main/services'
 import { NAMES, READS_CHATS } from '../views'
 import { shortTime } from './Telegram'
 import Hero from './Hero'
-import Avatar from './Avatar'
+import Avatar, { TelegramAvatar } from './Avatar'
 
 const STATUS = {
   off: 'Turned off',
@@ -69,7 +69,7 @@ function LatestMessages({ services, chats, telegram, enabled, onSelect, onOpenTe
                 className="latest-item"
                 onClick={() => (c.service === 'telegram' ? onOpenTelegram(c.id) : onSelect(c.service))}
               >
-                <Avatar name={c.name} />
+                {c.service === 'telegram' ? <TelegramAvatar dialog={{ id: c.id, name: c.name, kind: c.kind }} /> : <Avatar name={c.name} />}
                 <span className="latest-main">
                   <span className="latest-top">
                     <span className={`latest-name${c.unread ? ' is-unread' : ''}`}>{c.name}</span>

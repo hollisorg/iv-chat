@@ -1,9 +1,9 @@
 IV Chat
 (c) 2026 Infinite Variance. Released under the MIT licence.
 
-WhatsApp and Messenger appear in IV Chat as their own official websites
-(web.whatsapp.com and facebook.com). IV Chat is not made by or affiliated with
-WhatsApp, Meta or Telegram. Your use of each service follows that service's terms.
+WhatsApp, Messenger, Instagram and LinkedIn appear in IV Chat as their own official
+websites. IV Chat is not made by or affiliated with WhatsApp, Meta, Instagram,
+LinkedIn or Telegram. Your use of each service follows that service's terms.
 
 IV Chat is built from the open-source software listed below. Full licence texts
 are in the "licenses" folder next to this file.
@@ -20,6 +20,25 @@ electron-updater 6
 
 React and React DOM 19
   Licence: MIT. licenses/React-MIT.txt
+
+GramJS (telegram) 2.26, Telegram's API client
+  Licence: MIT. licenses/GramJS-MIT.txt
+  Source code: https://github.com/gram-js/gramjs
+
+Model Context Protocol SDK 1.32
+  Licence: MIT. licenses/MCP-SDK-MIT.txt
+
+lottie-web 5.12 (animated stickers)
+  Licence: MIT. licenses/lottie-web-MIT.txt
+
+qrcode 1.5
+  Licence: MIT. licenses/qrcode-MIT.txt
+
+zod 4
+  Licence: MIT. licenses/zod-MIT.txt
+
+big-integer 1.6
+  Licence: The Unlicense (public domain). licenses/big-integer-Unlicense.txt
 
 Fonts: Barlow, DM Sans, JetBrains Mono
   Licence: SIL Open Font License 1.1

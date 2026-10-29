@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 
 const on = (channel) => (cb) => {
   const listener = (_e, payload) => cb(payload)
@@ -25,6 +25,8 @@ contextBridge.exposeInMainWorld('iv', {
     onDialogs: on('telegram:dialogs'),
     onMessage: on('telegram:message'),
     onOpen: on('telegram:open'),
+    onTyping: on('telegram:typing'),
+    onStatus: on('telegram:status'),
     saveKeys: (apiId, apiHash) => ipcRenderer.invoke('telegram:saveKeys', apiId, apiHash),
     signIn: () => ipcRenderer.invoke('telegram:signIn'),
     password: (pw) => ipcRenderer.invoke('telegram:password', pw),
@@ -33,13 +35,27 @@ contextBridge.exposeInMainWorld('iv', {
     messages: (id, opts) => ipcRenderer.invoke('telegram:messages', id, opts),
     markRead: (id) => ipcRenderer.invoke('telegram:markRead', id),
     refresh: () => ipcRenderer.invoke('telegram:refresh'),
-    send: (id, text) => ipcRenderer.invoke('telegram:send', id, text),
+    send: (id, text, opts) => ipcRenderer.invoke('telegram:send', id, text, opts),
+    edit: (id, msgId, text) => ipcRenderer.invoke('telegram:edit', id, msgId, text),
+    remove: (id, msgIds, everyone) => ipcRenderer.invoke('telegram:delete', id, msgIds, everyone),
+    forward: (fromId, msgIds, toId) => ipcRenderer.invoke('telegram:forward', fromId, msgIds, toId),
+    pin: (id, msgId, unpin) => ipcRenderer.invoke('telegram:pin', id, msgId, unpin),
+    chatInfo: (id) => ipcRenderer.invoke('telegram:chatInfo', id),
+    pinned: (id) => ipcRenderer.invoke('telegram:pinned', id),
+    avatar: (id) => ipcRenderer.invoke('telegram:avatar', id),
+    search: (id, query) => ipcRenderer.invoke('telegram:search', id, query),
+    mediaUrl: (id, msgId) => ipcRenderer.invoke('telegram:mediaUrl', id, msgId),
     preview: (id, msgId) => ipcRenderer.invoke('telegram:preview', id, msgId),
     audio: (id, msgId) => ipcRenderer.invoke('telegram:audio', id, msgId),
     react: (id, msgId, emoji) => ipcRenderer.invoke('telegram:react', id, msgId, emoji),
     save: (id, msgId) => ipcRenderer.invoke('telegram:save', id, msgId),
     pickFile: () => ipcRenderer.invoke('telegram:pickFile'),
-    sendFile: (id, token, caption) => ipcRenderer.invoke('telegram:sendFile', id, token, caption)
+    sendVoice: (id, bytes, waveform, opts) => ipcRenderer.invoke('telegram:sendVoice', id, bytes, waveform, opts),
+    stagePath: (filePath) => ipcRenderer.invoke('telegram:stagePath', filePath),
+    stageBytes: (name, bytes) => ipcRenderer.invoke('telegram:stageBytes', name, bytes),
+    // A dropped file's place on disk (Electron no longer puts it on the File object).
+    pathFor: (file) => webUtils.getPathForFile(file),
+    sendFile: (id, token, caption, opts) => ipcRenderer.invoke('telegram:sendFile', id, token, caption, opts)
   },
   draft: {
     engines: () => ipcRenderer.invoke('draft:engines'),

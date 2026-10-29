@@ -3,78 +3,24 @@
 // The session is stored encrypted (secure-store). Sending happens only from the person's own keypress in the
 // IV Chat window (see index.js); the AI side only ever reads and saves drafts.
 import { EventEmitter } from 'node:events'
+import bigInt from 'big-integer'
 import QRCode from 'qrcode'
 import { Api, TelegramClient, utils } from 'telegram'
 import { StringSession } from 'telegram/sessions/index.js'
 import { NewMessage, Raw } from 'telegram/events/index.js'
 import { LogLevel } from 'telegram/extensions/Logger.js'
 import { deleteSecret, readSecret, writeSecret } from './secure-store'
-import { decodeWaveform, waveformBars } from './waveform.js'
+import { encodeWaveform } from './waveform.js'
+import { actionText, dialogName, entityList, linkPreview, mediaInfo, messageText, personName, reactionList, senderName, serviceText, statusText } from './tg-format.js'
 
 const KEYS = 'telegram-app'
 const SESSION = 'telegram-session'
 const MAX_UPDATES = 200
 const MAX_PREVIEWS = 300
 const MAX_AUDIO_BYTES = 25 * 1024 * 1024
+const TYPING_MS = 6000
 
 const peerId = (id) => String(id)
-
-function dialogName(d) {
-  return d.title || d.name || [d.entity?.firstName, d.entity?.lastName].filter(Boolean).join(' ') || 'Unknown'
-}
-
-function senderName(msg, me) {
-  if (msg.out) return 'You'
-  const s = msg.sender
-  if (!s) return ''
-  if (s.id && me && String(s.id) === String(me.id)) return 'You'
-  return s.title || [s.firstName, s.lastName].filter(Boolean).join(' ') || s.username || ''
-}
-
-// What a message carries besides text, for showing it: a photo, video, voice note, sticker or file.
-function mediaInfo(msg) {
-  const media = msg.media
-  if (!media) return null
-  if (media.className === 'MessageMediaPhoto') return { kind: 'photo' }
-  if (media.className === 'MessageMediaDocument' && media.document) {
-    const d = media.document
-    const attrs = d.attributes || []
-    const has = (name) => attrs.find((a) => a.className === name)
-    const audio = has('DocumentAttributeAudio')
-    const kind = has('DocumentAttributeSticker') ? 'sticker' : audio?.voice ? 'voice' : audio ? 'audio' : has('DocumentAttributeVideo') ? 'video' : 'file'
-    return {
-      kind,
-      name: has('DocumentAttributeFilename')?.fileName || '',
-      size: Number(String(d.size ?? 0)),
-      mime: d.mimeType || '',
-      duration: Number(audio?.duration || has('DocumentAttributeVideo')?.duration || 0),
-      // Voice messages carry their own loudness shape; the player draws it as bars.
-      bars: audio ? waveformBars(decodeWaveform(audio.waveform), 44, Number(String(d.id ?? 1).slice(-9))) : undefined,
-      preview: Boolean(d.thumbs?.length) || (kind === 'sticker' && d.mimeType === 'image/webp')
-    }
-  }
-  return { kind: 'other', label: media.className?.replace(/^MessageMedia/, '') || 'Media' }
-}
-
-// The reactions under a message: each emoji, how many people chose it, and whether one of them is you.
-// Custom (premium) emoji reactions can't be drawn here, so they show as a star.
-function reactionList(msg) {
-  return (msg.reactions?.results || []).map((r) => ({
-    emoji: r.reaction?.className === 'ReactionEmoji' ? r.reaction.emoticon : '★',
-    custom: r.reaction?.className !== 'ReactionEmoji',
-    count: r.count || 0,
-    mine: r.chosenOrder !== undefined && r.chosenOrder !== null
-  }))
-}
-
-function messageText(msg) {
-  if (msg.message) return msg.message
-  if (msg.media) {
-    const kind = msg.media.className?.replace(/^MessageMedia/, '') || 'media'
-    return `[${kind === 'Photo' ? 'Photo' : kind === 'Document' ? 'File' : kind}]`
-  }
-  return ''
-}
 
 export class TelegramService extends EventEmitter {
   constructor() {
@@ -89,6 +35,7 @@ export class TelegramService extends EventEmitter {
     this.updates = [] // incoming messages since start, newest last
     this.passwordWaiter = null
     this.previews = new Map() // "chat:message" -> data URL of a photo or thumbnail, kept in memory
+    this.avatars = new Map() // chat id -> Promise of a profile picture data URL (or null)
   }
 
   // Only the fields the UI needs; never the session or keys.
@@ -196,16 +143,27 @@ export class TelegramService extends EventEmitter {
     writeSecret(SESSION, { session: this.client.session.save() })
     this.me = await this.client.getMe()
     this.client.addEventHandler((e) => this.onMessage(e), new NewMessage({}))
-    // Someone reacted: tell the open conversation to refresh.
+    // Reactions, edits, deletions, pins and read receipts: tell the open conversation to refresh. Typing and
+    // online status go to the conversation header.
     this.client.addEventHandler(
-      (update) => {
-        try {
-          this.emit('message', String(utils.getPeerId(update.peer)))
-        } catch {
-          /* not a chat we show */
-        }
-      },
-      new Raw({ types: [Api.UpdateMessageReactions] })
+      (update) => this.onUpdate(update).catch(() => {}),
+      new Raw({
+        types: [
+          Api.UpdateMessageReactions,
+          Api.UpdateEditMessage,
+          Api.UpdateEditChannelMessage,
+          Api.UpdateDeleteMessages,
+          Api.UpdateDeleteChannelMessages,
+          Api.UpdatePinnedMessages,
+          Api.UpdatePinnedChannelMessages,
+          Api.UpdateReadHistoryOutbox,
+          Api.UpdateReadChannelOutbox,
+          Api.UpdateUserTyping,
+          Api.UpdateChatUserTyping,
+          Api.UpdateChannelUserTyping,
+          Api.UpdateUserStatus
+        ]
+      })
     )
     await this.refreshDialogs()
     this.set({ status: 'ready', qr: null, passwordHint: '', error: null })
@@ -220,6 +178,7 @@ export class TelegramService extends EventEmitter {
     deleteSecret(SESSION)
     this.me = null
     this.dialogs.clear()
+    this.avatars.clear()
     this.updates = []
     this.emit('dialogs', [])
     await this.start()
@@ -251,6 +210,8 @@ export class TelegramService extends EventEmitter {
         unread: d.unreadCount || 0,
         preview: d.message ? messageText(d.message) : '',
         at: d.message?.date ? d.message.date * 1000 : null,
+        // Your messages up to this id have been read by the other side (for the double tick).
+        readOut: d.dialog?.readOutboxMaxId || 0,
         entity: d.entity
       })
     }
@@ -285,20 +246,155 @@ export class TelegramService extends EventEmitter {
     return d.entity
   }
 
-  async messages(id, { limit = 40, beforeId } = {}) {
-    const list = await this.client.getMessages(this.entity(id), { limit: Math.min(limit, 100), offsetId: beforeId || 0 })
+  // A page of messages, oldest first: the latest ones, the ones before `beforeId`, or the ones around
+  // `aroundId` (for jumping to a search result or a replied-to message).
+  async messages(id, { limit = 40, beforeId, aroundId } = {}) {
+    const entity = this.entity(id)
+    const opts = { limit: Math.min(limit, 100) }
+    if (aroundId) Object.assign(opts, { offsetId: Number(aroundId) + 1, addOffset: -Math.floor(opts.limit / 2) })
+    else if (beforeId) opts.offsetId = Number(beforeId)
+    const list = await this.client.getMessages(entity, opts)
+    // Replies show a quote of the message they answer; fetch the ones not already on this page.
+    const here = new Map(list.map((m) => [m.id, m]))
+    const wanted = [...new Set(list.filter((m) => m.replyTo?.replyToMsgId && !m.replyTo.replyToPeerId && !here.has(m.replyTo.replyToMsgId)).map((m) => m.replyTo.replyToMsgId))]
+    if (wanted.length) {
+      try {
+        for (const m of await this.client.getMessages(entity, { ids: wanted })) if (m) here.set(m.id, m)
+      } catch {
+        /* quotes just won't show */
+      }
+    }
+    const d = this.dialogs.get(peerId(id))
     return list
-      .map((m) => ({
-        id: m.id,
-        from: senderName(m, this.me),
-        text: messageText(m),
-        caption: m.message || '',
-        reactions: reactionList(m),
-        media: mediaInfo(m),
-        at: m.date * 1000,
-        outgoing: Boolean(m.out)
-      }))
-      .reverse()
+      .map((m) => this.item(m, here, d))
+      .sort((a, b) => a.id - b.id)
+  }
+
+  // One message in the shape the window draws.
+  item(m, others, d) {
+    const reply = m.replyTo?.replyToMsgId && !m.replyTo.replyToPeerId ? others?.get(m.replyTo.replyToMsgId) : null
+    const fwd = m.fwdFrom
+    return {
+      id: m.id,
+      from: senderName(m, this.me),
+      fromId: m.senderId ? String(m.senderId) : null,
+      text: messageText(m),
+      body: m.message || '',
+      entities: entityList(m),
+      caption: m.message || '',
+      reactions: reactionList(m),
+      media: mediaInfo(m),
+      link: linkPreview(m),
+      service: m.action ? serviceText(m) : null,
+      reply: m.replyTo?.replyToMsgId
+        ? reply
+          ? { id: reply.id, from: senderName(reply, this.me) || personName(reply.sender), text: messageText(reply) }
+          : { id: m.replyTo.replyToMsgId, from: '', text: 'Message' }
+        : null,
+      forwarded: fwd ? personName(m.forward?.sender) || personName(m.forward?.chat) || fwd.fromName || 'someone' : null,
+      edited: Boolean(m.editDate && !m.editHide),
+      pinned: Boolean(m.pinned),
+      album: m.groupedId ? String(m.groupedId) : null,
+      at: m.date * 1000,
+      // Telegram doesn't mark what you write in Saved Messages as outgoing; IV Chat treats it as yours, as
+      // Telegram's own apps do (forwarded items stay on the other side).
+      outgoing: Boolean(m.out || (d?.kind === 'saved' && !m.fwdFrom)),
+      // Sent and read ticks for your own messages. Saved Messages counts as read.
+      read: Boolean((m.out && d?.readOut && m.id <= d.readOut) || (d?.kind === 'saved' && !m.fwdFrom))
+    }
+  }
+
+  // The header line for a chat: online or last seen for a person, the member count for a group or channel.
+  async chatInfo(id) {
+    const d = this.dialogs.get(peerId(id))
+    if (!d) return {}
+    if (d.kind === 'saved') return { subtitle: 'your notes and saved messages' }
+    if (d.kind === 'person') return { subtitle: d.entity?.bot ? 'bot' : statusText(d.entity?.status) }
+    const count = d.entity?.participantsCount
+    const word = d.kind === 'channel' ? 'subscriber' : 'member'
+    return { subtitle: count ? `${count.toLocaleString()} ${word}${count === 1 ? '' : 's'}` : d.kind }
+  }
+
+  // A chat's small profile picture (a person's photo, or a group's or channel's), loaded once and kept in
+  // memory. Null when there's none; the window then draws initials.
+  avatar(id) {
+    const key = peerId(id)
+    if (!this.avatars.has(key)) {
+      const d = this.dialogs.get(key)
+      const photo = d?.entity?.photo
+      const load =
+        !d || d.kind === 'saved' || !photo || /Empty$/.test(photo.className || '')
+          ? Promise.resolve(null)
+          : this.client
+              .downloadProfilePhoto(d.entity, { isBig: false })
+              .then((buf) => (Buffer.isBuffer(buf) && buf.length ? `data:image/jpeg;base64,${buf.toString('base64')}` : null))
+              .catch(() => null)
+      this.avatars.set(key, load)
+    }
+    return this.avatars.get(key)
+  }
+
+  // The most recent pinned message in a chat, for the bar at the top of the conversation.
+  async pinned(id) {
+    try {
+      const [m] = await this.client.getMessages(this.entity(id), { limit: 1, filter: new Api.InputMessagesFilterPinned() })
+      return m ? { id: m.id, text: messageText(m) } : null
+    } catch {
+      return null
+    }
+  }
+
+  // Updates other than new messages. Each one either refreshes a chat, or reports typing or online status.
+  async onUpdate(u) {
+    const channel = (channelId) => peerId(utils.getPeerId(new Api.PeerChannel({ channelId })))
+    switch (u.className) {
+      case 'UpdateReadHistoryOutbox': {
+        const id = peerId(utils.getPeerId(u.peer))
+        const d = this.dialogs.get(id)
+        if (d) d.readOut = Math.max(d.readOut || 0, u.maxId)
+        return this.emit('message', id)
+      }
+      case 'UpdateReadChannelOutbox': {
+        const id = channel(u.channelId)
+        const d = this.dialogs.get(id)
+        if (d) d.readOut = Math.max(d.readOut || 0, u.maxId)
+        return this.emit('message', id)
+      }
+      case 'UpdateEditMessage':
+      case 'UpdateEditChannelMessage':
+        return this.emit('message', peerId(utils.getPeerId(u.message.peerId)))
+      case 'UpdateDeleteChannelMessages':
+      case 'UpdatePinnedChannelMessages':
+        return this.emit('message', channel(u.channelId))
+      case 'UpdateDeleteMessages':
+        // Private and small-group deletions don't say which chat; the open one checks itself.
+        return this.emit('message', '*')
+      case 'UpdatePinnedMessages':
+      case 'UpdateMessageReactions':
+        return this.emit('message', peerId(utils.getPeerId(u.peer)))
+      case 'UpdateUserStatus': {
+        const d = this.dialogs.get(peerId(u.userId))
+        if (d?.entity) d.entity.status = u.status
+        return this.emit('status', peerId(u.userId))
+      }
+      case 'UpdateUserTyping':
+      case 'UpdateChatUserTyping':
+      case 'UpdateChannelUserTyping': {
+        const text = actionText(u.action)
+        const chatId =
+          u.className === 'UpdateUserTyping' ? peerId(u.userId) : u.className === 'UpdateChatUserTyping' ? peerId(utils.getPeerId(new Api.PeerChat({ chatId: u.chatId }))) : channel(u.channelId)
+        let name = ''
+        if (u.className !== 'UpdateUserTyping' && u.fromId) {
+          try {
+            name = personName(await this.client.getEntity(u.fromId)).split(' ')[0]
+          } catch {
+            /* "someone is typing" */
+          }
+        }
+        return this.emit('typing', { chatId, text: text ? (name ? `${name} is ${text}` : text) : null, until: text ? Date.now() + TYPING_MS : 0 })
+      }
+      default:
+    }
   }
 
   async message(id, msgId) {
@@ -315,8 +411,10 @@ export class TelegramService extends EventEmitter {
     const info = mediaInfo(msg)
     let buf
     let type = 'image/jpeg'
-    if (info?.kind === 'photo') {
-      const sizes = msg.media.photo?.sizes || []
+    const webPhoto = msg.media?.className === 'MessageMediaWebPage' ? msg.media.webpage?.photo : null
+    if (info?.kind === 'photo' || webPhoto) {
+      // A link preview's picture is a photo too; downloadMedia picks it out of the page.
+      const sizes = (webPhoto || msg.media.photo)?.sizes || []
       const pick = ['x', 'm', 'y'].map((t) => sizes.findIndex((s) => s.type === t)).find((i) => i >= 0)
       buf = await this.client.downloadMedia(msg, { thumb: pick ?? sizes.length - 1 })
     } else if (info?.kind === 'sticker' && info.mime === 'image/webp') {
@@ -341,6 +439,26 @@ export class TelegramService extends EventEmitter {
     if (!Buffer.isBuffer(buf)) throw new Error('The audio could not be loaded')
     const type = info.mime || (info.kind === 'voice' ? 'audio/ogg' : 'audio/mpeg')
     return `data:${type};base64,${buf.toString('base64')}`
+  }
+
+  // The full file behind a video, GIF, sticker or photo, for the in-app player and photo viewer (tg-media.js).
+  // Photos come as a whole buffer (they're small); documents stream through the writer as they download.
+  async mediaSource(id, msgId) {
+    const msg = await this.message(id, msgId)
+    const info = mediaInfo(msg)
+    if (!info || info.kind === 'other') throw new Error('That message has nothing to play')
+    if (info.kind === 'photo') {
+      const buf = await this.client.downloadMedia(msg, {})
+      if (!Buffer.isBuffer(buf)) throw new Error('The photo could not be loaded')
+      return { size: buf.length, mime: 'image/jpeg', download: async (writer) => writer.write(buf) }
+    }
+    return {
+      size: info.size,
+      mime: info.mime || 'application/octet-stream',
+      download: (writer) => this.client.downloadMedia(msg, { outputFile: writer }),
+      // Chunks from any point in the file, for seeking ahead of the download. `offset` is a multiple of 512 KB.
+      readFrom: (offset) => this.client.iterDownload({ file: msg.media, offset: bigInt(offset), requestSize: 512 * 1024, fileSize: bigInt(info.size) })
+    }
   }
 
   // Saves the full photo or file to a place the person picked.
@@ -397,18 +515,52 @@ export class TelegramService extends EventEmitter {
   }
 
   // Called only from the IV Chat window when the person presses Enter or Send (see index.js).
-  async sendFromPerson(id, text) {
+  // `replyTo` quotes one of the chat's messages, as Telegram's Reply does.
+  async sendFromPerson(id, text, { replyTo } = {}) {
     const message = String(text ?? '').trim()
     if (!message) return
-    await this.client.sendMessage(this.entity(id), { message })
+    await this.client.sendMessage(this.entity(id), { message, replyTo: replyTo ? Number(replyTo) : undefined })
     // Clear any saved draft for that chat, the same as Telegram's own apps do after sending.
     await this.client.invoke(new Api.messages.SaveDraft({ peer: this.entity(id), message: '' })).catch(() => {})
   }
 
   // Called only from the IV Chat window when the person attaches a file and presses Send (see index.js).
-  async sendFileFromPerson(id, filePath, caption) {
-    await this.client.sendFile(this.entity(id), { file: filePath, caption: String(caption ?? '').slice(0, 1024), forceDocument: false })
+  async sendFileFromPerson(id, filePath, caption, { replyTo } = {}) {
+    await this.client.sendFile(this.entity(id), { file: filePath, caption: String(caption ?? '').slice(0, 1024), forceDocument: false, replyTo: replyTo ? Number(replyTo) : undefined })
     await this.client.invoke(new Api.messages.SaveDraft({ peer: this.entity(id), message: '' })).catch(() => {})
+  }
+
+  // A voice message the person recorded and sent from the IV Chat window (see index.js): OGG Opus with its
+  // length and waveform, so it shows as a voice note with bars in every Telegram app.
+  async sendVoiceFromPerson(id, filePath, { seconds, waveform, replyTo } = {}) {
+    await this.client.sendFile(this.entity(id), {
+      file: filePath,
+      voiceNote: true,
+      attributes: [new Api.DocumentAttributeAudio({ voice: true, duration: Math.max(1, Math.round(seconds || 0)), waveform: Buffer.from(encodeWaveform(waveform || [])) })],
+      replyTo: replyTo ? Number(replyTo) : undefined
+    })
+    await this.client.invoke(new Api.messages.SaveDraft({ peer: this.entity(id), message: '' })).catch(() => {})
+  }
+
+  // The rest are also accepted only from the person's own clicks in the IV Chat window (see index.js).
+  async editFromPerson(id, msgId, text) {
+    const message = String(text ?? '').trim()
+    if (!message) throw new Error('A message needs some text')
+    await this.client.editMessage(this.entity(id), { message: Number(msgId), text: message })
+  }
+
+  // `everyone` deletes it for the other people in the chat too, where Telegram allows that.
+  async deleteFromPerson(id, msgIds, everyone) {
+    await this.client.deleteMessages(this.entity(id), msgIds.map(Number), { revoke: Boolean(everyone) })
+  }
+
+  async forwardFromPerson(fromId, msgIds, toId) {
+    await this.client.forwardMessages(this.entity(toId), { messages: msgIds.map(Number), fromPeer: this.entity(fromId) })
+  }
+
+  async pinFromPerson(id, msgId, unpin) {
+    if (unpin) await this.client.unpinMessage(this.entity(id), Number(msgId))
+    else await this.client.pinMessage(this.entity(id), Number(msgId), { notify: false })
   }
 
   // Called only from the IV Chat window when the person clicks a reaction (see index.js).

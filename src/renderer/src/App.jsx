@@ -95,7 +95,7 @@ export default function App() {
   const ai = aiState?.ai ?? settings?.ai ?? { enabled: true, mode: 'chosen', allowed: [], excluded: [] }
 
   return (
-    <div className="app">
+    <div className={`app${settings?.navCollapsed ? ' is-mini' : ''}`}>
       <header className="titlebar">
         <img className="brand-logo" src={chatMark} alt="IV Chat" />
         <span className="mono">Infinite Variance</span>
@@ -122,7 +122,16 @@ export default function App() {
         </button>
         </div>
       </header>
-      <Rail view={view} services={services} totalUnread={totalUnread} telegramUnread={tgUnread} version={update?.version} onSelect={setView} />
+      <Rail
+        view={view}
+        services={services}
+        totalUnread={totalUnread}
+        telegramUnread={tgUnread}
+        version={update?.version}
+        collapsed={Boolean(settings?.navCollapsed)}
+        onToggle={() => changeSettings({ navCollapsed: !settings?.navCollapsed })}
+        onSelect={setView}
+      />
         <main className="main">
           {panel && (
             <PanelHost key={panel.id} service={panel} onEnable={(id) => changeSettings({ services: { [id]: { enabled: true } } })} />

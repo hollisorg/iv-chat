@@ -24,7 +24,17 @@ replies, but nothing is ever sent for you: a message only goes when you press En
   each signed in separately. Telegram connects directly through Telegram's official API.
 - **Updates.** One page with your unread counts and the latest messages from WhatsApp, Messenger and
   Telegram.
-- **Telegram, built in.** Read and reply, send pictures and files, play voice messages, react with emoji.
+- **Telegram, built in, like Telegram Desktop.**
+  - Clickable links with previews, and Telegram's formatting: bold, italic, code, quotes, spoilers.
+  - Videos play right in the chat, starting while they download, with seeking. GIFs, video stickers and
+    animated stickers loop by themselves; round video messages play in a circle; photos open in a viewer.
+  - Reply, edit (or press Up in an empty box), delete, forward, copy and pin. Albums, date separators,
+    read ticks, "typing…", online and last seen, a pinned-message bar, search in the chat and a jump to
+    the latest messages.
+  - Record and send voice messages, play them with a waveform player, react with emoji, and send pictures
+    and files by picking, dropping or pasting them.
+  - Real profile pictures for people, groups and channels.
+- **Room to work.** The sidebar collapses to a column of round logo buttons with their unread counts.
 - **Draft reply.** A button above every chat writes a reply with the Codex app or Claude Code already on
   your PC. Add a few words about what you want to say if you like. The draft lands in the reply box for
   you to check, edit and send yourself.

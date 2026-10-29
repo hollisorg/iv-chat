@@ -47,6 +47,10 @@ export function parseUnread(title) {
 }
 
 export function hostAllowed(service, rawUrl) {
+  return onHosts(service.hosts, rawUrl)
+}
+
+function onHosts(hosts, rawUrl) {
   let url
   try {
     url = new URL(rawUrl)
@@ -55,7 +59,18 @@ export function hostAllowed(service, rawUrl) {
   }
   if (url.protocol !== 'https:') return false
   const host = url.hostname.toLowerCase()
-  return service.hosts.some((h) => host === h || host.endsWith(`.${h}`))
+  return hosts.some((h) => host === h || host.endsWith(`.${h}`))
+}
+
+// "Continue with Google / Apple / Microsoft" sign-in pages. They open as a pop-up window that has to stay in
+// the panel's own session, so the finished sign-in can reach the site that opened it.
+export const SIGN_IN_HOSTS = ['accounts.google.com', 'appleid.apple.com', 'login.microsoftonline.com', 'login.live.com']
+
+// Where a pop-up from a panel may load inside IV Chat: the service's own domains or a sign-in page. A blank
+// pop-up is allowed too, because sign-in buttons often open an empty window first and then send it on.
+export function popupAllowed(service, rawUrl) {
+  if (!rawUrl || rawUrl === 'about:blank') return true
+  return hostAllowed(service, rawUrl) || onHosts(SIGN_IN_HOSTS, rawUrl)
 }
 
 // Electron's default user agent names Electron and the app; the sites treat that as an unsupported browser.

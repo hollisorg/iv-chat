@@ -5,6 +5,7 @@ import {
   approxTime,
   chromeUserAgent,
   hostAllowed,
+  popupAllowed,
   latestAcross,
   parseUnread,
   sanitizeChats,
@@ -162,4 +163,17 @@ test('Telegram waveforms: 5-bit values unpack and shrink to bars', () => {
   assert.equal(made.length, 10)
   assert.ok(made.every((b) => b >= 0.25 && b <= 0.75))
   assert.deepEqual(made, waveformBars([], 10, 42))
+})
+
+test('popupAllowed keeps sign-in pop-ups in the panel and sends other links out', () => {
+  const li = SERVICES.linkedin
+  assert.ok(popupAllowed(li, 'about:blank'))
+  assert.ok(popupAllowed(li, ''))
+  assert.ok(popupAllowed(li, 'https://www.linkedin.com/uas/login'))
+  assert.ok(popupAllowed(li, 'https://accounts.google.com/o/oauth2/v2/auth?client_id=x'))
+  assert.ok(popupAllowed(li, 'https://appleid.apple.com/auth/authorize'))
+  assert.ok(popupAllowed(li, 'https://login.microsoftonline.com/common/oauth2'))
+  assert.ok(!popupAllowed(li, 'https://example.com/article'))
+  assert.ok(!popupAllowed(li, 'http://accounts.google.com/'))
+  assert.ok(!popupAllowed(li, 'https://accounts.google.com.evil.com/'))
 })
