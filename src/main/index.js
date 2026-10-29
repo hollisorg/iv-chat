@@ -288,6 +288,12 @@ function registerIpc() {
   // ---------- Telegram ----------
 
   const tgId = (id) => String(id ?? '').slice(0, 40)
+  // Reply, send without sound, or send later (a time at least a minute ahead, within a year).
+  const sendOpts = (opts) => {
+    const schedule = Number(opts?.schedule) || 0
+    const ok = schedule > Date.now() + 30_000 && schedule < Date.now() + 365 * 86400e3
+    return { replyTo: Number(opts?.replyTo) || 0, silent: Boolean(opts?.silent), schedule: ok ? schedule : 0 }
+  }
   ipcMain.handle('telegram:state', () => telegram.state())
   ipcMain.handle('telegram:dialogs', () => (telegram.status === 'ready' ? telegram.dialogList() : []))
   ipcMain.handle('telegram:saveKeys', (_e, apiId, apiHash) => telegram.saveAppKeys(apiId, apiHash))
@@ -306,6 +312,8 @@ function registerIpc() {
   ipcMain.handle('telegram:findChats', (_e, query) => telegram.findChats(String(query ?? '').slice(0, 64)))
   ipcMain.handle('telegram:openFound', (_e, id) => telegram.openFound(tgId(id)))
   ipcMain.handle('telegram:details', (_e, id) => telegram.chatDetails(tgId(id)))
+  ipcMain.handle('telegram:scheduled', (_e, id) => telegram.scheduled(tgId(id)))
+  ipcMain.handle('telegram:translate', (_e, id, msgIds, toLang) => telegram.translate(tgId(id), (Array.isArray(msgIds) ? msgIds : [msgIds]).map(Number).slice(0, 50), String(toLang || 'en')))
   ipcMain.handle('telegram:shared', (_e, id, kind, beforeId) => telegram.sharedMedia(tgId(id), String(kind), Number(beforeId) || 0))
   ipcMain.handle('telegram:search', (_e, id, query) => telegram.search(String(query ?? '').slice(0, 200), tgId(id)))
   ipcMain.handle('telegram:mediaUrl', (_e, id, msgId) => mediaUrl(tgId(id), Number(msgId)))
@@ -390,7 +398,7 @@ function registerIpc() {
     const filePath = pickedFiles.get(token)
     if (!filePath) throw new Error('Pick the file again')
     pickedFiles.delete(token)
-    await telegram.sendFileFromPerson(tgId(id), filePath, caption, { replyTo: Number(opts?.replyTo) || 0 })
+    await telegram.sendFileFromPerson(tgId(id), filePath, caption, sendOpts(opts))
     delete aiDrafts[`telegram:${tgId(id)}`]
   })
   ipcMain.handle('telegram:refresh', () => telegram.refreshDialogs())
@@ -398,7 +406,7 @@ function registerIpc() {
   // The MCP has no way to reach it.
   ipcMain.handle('telegram:send', async (e, id, text, opts) => {
     if (e.sender !== win?.webContents) throw new Error('Not allowed')
-    await telegram.sendFromPerson(tgId(id), String(text ?? '').slice(0, 4096), { replyTo: Number(opts?.replyTo) || 0 })
+    await telegram.sendFromPerson(tgId(id), String(text ?? '').slice(0, 4096), sendOpts(opts))
     delete aiDrafts[`telegram:${tgId(id)}`]
   })
   // Editing, deleting, forwarding and pinning: like sending, only from the person's own clicks in this window.
@@ -417,6 +425,28 @@ function registerIpc() {
   ipcMain.handle('telegram:forward', async (e, fromId, msgIds, toId) => {
     fromWindow(e)
     await telegram.forwardFromPerson(tgId(fromId), ids(msgIds), tgId(toId))
+  })
+  // Polls, bot buttons and scheduled messages: also only from the person's clicks.
+  ipcMain.handle('telegram:vote', async (e, id, msgId, options) => {
+    fromWindow(e)
+    await telegram.voteFromPerson(tgId(id), Number(msgId), (Array.isArray(options) ? options : []).map(String).slice(0, 10))
+  })
+  ipcMain.handle('telegram:sendPoll', async (e, id, poll, opts) => {
+    fromWindow(e)
+    const p = poll || {}
+    await telegram.sendPollFromPerson(tgId(id), { question: String(p.question ?? ''), answers: (Array.isArray(p.answers) ? p.answers : []).map(String), multiple: Boolean(p.multiple), quiz: Boolean(p.quiz), correct: Number(p.correct) || 0, anonymous: p.anonymous !== false }, sendOpts(opts))
+  })
+  ipcMain.handle('telegram:pressButton', async (e, id, msgId, data, game) => {
+    fromWindow(e)
+    return telegram.pressButtonFromPerson(tgId(id), Number(msgId), String(data ?? ''), Boolean(game))
+  })
+  ipcMain.handle('telegram:sendScheduledNow', async (e, id, msgIds) => {
+    fromWindow(e)
+    await telegram.sendScheduledNowFromPerson(tgId(id), ids(msgIds))
+  })
+  ipcMain.handle('telegram:deleteScheduled', async (e, id, msgIds) => {
+    fromWindow(e)
+    await telegram.deleteScheduledFromPerson(tgId(id), ids(msgIds))
   })
   // The chat list's own actions, also only from the person's clicks.
   ipcMain.handle('telegram:pinChat', async (e, id, pinned) => {

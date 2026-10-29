@@ -11,7 +11,7 @@ import { NewMessage, Raw } from 'telegram/events/index.js'
 import { LogLevel } from 'telegram/extensions/Logger.js'
 import { deleteSecret, readSecret, writeSecret } from './secure-store'
 import { encodeWaveform } from './waveform.js'
-import { actionText, dialogName, entityList, folderRules, inFolder, linkPreview, mediaInfo, messageText, personName, reactionList, senderName, serviceText, statusText } from './tg-format.js'
+import { actionText, dialogName, entityList, folderRules, inFolder, markupInfo, pollInfo, linkPreview, mediaInfo, messageText, personName, reactionList, senderName, serviceText, statusText } from './tg-format.js'
 
 const KEYS = 'telegram-app'
 const SESSION = 'telegram-session'
@@ -171,7 +171,8 @@ export class TelegramService extends EventEmitter {
           Api.UpdateDialogUnreadMark,
           Api.UpdateDialogFilter,
           Api.UpdateDialogFilters,
-          Api.UpdateDialogFilterOrder
+          Api.UpdateDialogFilterOrder,
+          Api.UpdateMessagePoll
         ]
       })
     )
@@ -337,6 +338,11 @@ export class TelegramService extends EventEmitter {
       reactions: reactionList(m),
       media: mediaInfo(m),
       link: linkPreview(m),
+      poll: pollInfo(m),
+      buttons: markupInfo(m),
+      fromBot: Boolean(m.sender?.bot || m.viaBotId),
+      scheduled: Boolean(m.fromScheduled && m.date * 1000 > Date.now()),
+      silent: Boolean(m.silent),
       service: m.action ? serviceText(m) : null,
       reply: m.replyTo?.replyToMsgId
         ? reply
@@ -540,6 +546,8 @@ export class TelegramService extends EventEmitter {
       case 'UpdateDeleteChannelMessages':
       case 'UpdatePinnedChannelMessages':
         return this.emit('message', channel(u.channelId))
+      case 'UpdateMessagePoll':
+        // New votes on a poll don't say which chat; the open one checks itself.
       case 'UpdateDeleteMessages':
         // Private and small-group deletions don't say which chat; the open one checks itself.
         return this.emit('message', '*')
@@ -702,17 +710,18 @@ export class TelegramService extends EventEmitter {
 
   // Called only from the IV Chat window when the person presses Enter or Send (see index.js).
   // `replyTo` quotes one of the chat's messages, as Telegram's Reply does.
-  async sendFromPerson(id, text, { replyTo } = {}) {
+  // `silent` sends without a notification sound; `schedule` (a time in milliseconds) sends it later.
+  async sendFromPerson(id, text, { replyTo, silent, schedule } = {}) {
     const message = String(text ?? '').trim()
     if (!message) return
-    await this.client.sendMessage(this.entity(id), { message, replyTo: replyTo ? Number(replyTo) : undefined })
+    await this.client.sendMessage(this.entity(id), { message, replyTo: replyTo ? Number(replyTo) : undefined, silent: Boolean(silent), schedule: schedule ? Math.floor(schedule / 1000) : undefined })
     // Clear any saved draft for that chat, the same as Telegram's own apps do after sending.
     await this.client.invoke(new Api.messages.SaveDraft({ peer: this.entity(id), message: '' })).catch(() => {})
   }
 
   // Called only from the IV Chat window when the person attaches a file and presses Send (see index.js).
-  async sendFileFromPerson(id, filePath, caption, { replyTo } = {}) {
-    await this.client.sendFile(this.entity(id), { file: filePath, caption: String(caption ?? '').slice(0, 1024), forceDocument: false, replyTo: replyTo ? Number(replyTo) : undefined })
+  async sendFileFromPerson(id, filePath, caption, { replyTo, silent, schedule } = {}) {
+    await this.client.sendFile(this.entity(id), { file: filePath, caption: String(caption ?? '').slice(0, 1024), forceDocument: false, replyTo: replyTo ? Number(replyTo) : undefined, silent: Boolean(silent), scheduleDate: schedule ? Math.floor(schedule / 1000) : undefined })
     await this.client.invoke(new Api.messages.SaveDraft({ peer: this.entity(id), message: '' })).catch(() => {})
   }
 
@@ -726,6 +735,67 @@ export class TelegramService extends EventEmitter {
       replyTo: replyTo ? Number(replyTo) : undefined
     })
     await this.client.invoke(new Api.messages.SaveDraft({ peer: this.entity(id), message: '' })).catch(() => {})
+  }
+
+  // ---------- polls, bot buttons, scheduled messages, translation ----------
+  // Voting, sending and pressing bot buttons come only from the person's own clicks (see index.js).
+
+  // `options` are the chosen answers (base64 as the window has them); none takes your vote back.
+  async voteFromPerson(id, msgId, options) {
+    await this.client.invoke(new Api.messages.SendVote({ peer: this.entity(id), msgId: Number(msgId), options: options.map((o) => Buffer.from(String(o), 'base64')) }))
+  }
+
+  async sendPollFromPerson(id, { question, answers, multiple, quiz, correct, anonymous }, { replyTo, silent, schedule } = {}) {
+    const text = (t) => new Api.TextWithEntities({ text: String(t).slice(0, 300), entities: [] })
+    const list = answers.map((a) => String(a).trim()).filter(Boolean).slice(0, 10)
+    if (!String(question || '').trim() || list.length < 2) throw new Error('A poll needs a question and at least two answers')
+    const poll = new Api.Poll({
+      id: bigInt(Math.floor(Math.random() * 2 ** 52)),
+      question: text(question),
+      answers: list.map((a, i) => new Api.PollAnswer({ text: text(a), option: Buffer.from([i]) })),
+      multipleChoice: Boolean(multiple) && !quiz,
+      quiz: Boolean(quiz),
+      publicVoters: anonymous === false
+    })
+    const media = new Api.InputMediaPoll({ poll, correctAnswers: quiz ? [Buffer.from([Math.max(0, Math.min(list.length - 1, Number(correct) || 0))])] : undefined })
+    await this.client.invoke(
+      new Api.messages.SendMedia({
+        peer: this.entity(id),
+        media,
+        message: '',
+        randomId: bigInt(Math.floor(Math.random() * 2 ** 52)),
+        replyTo: replyTo ? new Api.InputReplyToMessage({ replyToMsgId: Number(replyTo) }) : undefined,
+        silent: Boolean(silent),
+        scheduleDate: schedule ? Math.floor(schedule / 1000) : undefined
+      })
+    )
+  }
+
+  // A bot's button under one of its messages. The bot can answer with a note, an alert or a link.
+  async pressButtonFromPerson(id, msgId, data, game) {
+    const res = await this.client.invoke(new Api.messages.GetBotCallbackAnswer({ peer: this.entity(id), msgId: Number(msgId), data: game ? undefined : Buffer.from(String(data || ''), 'base64'), game: Boolean(game) }))
+    return { message: res.message || '', alert: Boolean(res.alert), url: res.url || '' }
+  }
+
+  // Messages waiting to be sent later in a chat.
+  async scheduled(id) {
+    const res = await this.client.invoke(new Api.messages.GetScheduledHistory({ peer: this.entity(id), hash: bigInt(0) }))
+    const d = this.dialogs.get(peerId(id))
+    return (res.messages || []).filter((m) => m.className === 'Message').map((m) => ({ ...this.item(m, null, d), outgoing: true })).sort((a, b) => a.at - b.at)
+  }
+
+  async sendScheduledNowFromPerson(id, msgIds) {
+    await this.client.invoke(new Api.messages.SendScheduledMessages({ peer: this.entity(id), id: msgIds.map(Number) }))
+  }
+
+  async deleteScheduledFromPerson(id, msgIds) {
+    await this.client.invoke(new Api.messages.DeleteScheduledMessages({ peer: this.entity(id), id: msgIds.map(Number) }))
+  }
+
+  // Telegram's own translation of messages into `toLang` (like "en").
+  async translate(id, msgIds, toLang) {
+    const res = await this.client.invoke(new Api.messages.TranslateText({ peer: this.entity(id), id: msgIds.map(Number), toLang: String(toLang || 'en').slice(0, 8) }))
+    return (res.result || []).map((r) => r.text || '')
   }
 
   // The rest are also accepted only from the person's own clicks in the IV Chat window (see index.js).

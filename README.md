@@ -39,6 +39,12 @@ replies, but nothing is ever sent for you: a message only goes when you press En
   - Search your chats, people and public groups and channels in one box, or start a New chat.
   - A chat info panel with the about text, @username and member count, and the chat's shared photos and
     videos, files, links and voice messages.
+  - Vote in polls (and take your vote back) and send your own, including quizzes and multiple-choice polls.
+  - Bot buttons under messages and bot keyboards above the reply box.
+  - Right-click Send to send without sound or to schedule a message, and a list of what's scheduled with
+    Send now and Delete.
+  - Translate a message into your language from its menu.
+  - Select several messages to copy, forward or delete them together.
 - **Room to work.** The sidebar collapses to a column of round logo buttons with their unread counts.
 - **Draft reply.** A button above every chat writes a reply with the Codex app or Claude Code already on
   your PC. Add a few words about what you want to say if you like. The draft lands in the reply box for

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { TelegramAvatar } from '../Avatar'
 import RichText from './RichText'
 import { Media, SafeMessage, clock, usePreview } from './TgMedia'
+import Icon from './Icon'
 
 // The panel beside a conversation, like Telegram Desktop's chat info: the picture, name, status or member
 // count, @username, phone (for your contacts), about text, quick mute, pin and archive, and the chat's shared
@@ -92,7 +93,7 @@ export default function InfoPanel({ dialog, onClose, onJump, onOpenPhoto, onErro
     <aside className="info-panel" aria-label={`About ${dialog.name}`}>
       <div className="info-head">
         <button type="button" className="btn btn-quiet head-btn" onClick={onClose} aria-label="Close the chat info" title="Close (Esc)">
-          ×
+          <Icon name="close" />
         </button>
         <span className="mono dim">{d.kind === 'person' ? 'User info' : d.kind === 'channel' ? 'Channel info' : d.kind === 'saved' ? 'Saved Messages' : 'Group info'}</span>
       </div>

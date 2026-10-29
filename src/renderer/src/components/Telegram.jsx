@@ -6,7 +6,11 @@ import RichText from './tg/RichText'
 import VoiceRecorder from './tg/VoiceRecorder'
 import ChatList, { shortTime } from './tg/ChatList'
 import InfoPanel from './tg/InfoPanel'
+import { PollCard, PollDialog } from './tg/Poll'
+import { BotKeyboard, InlineButtons } from './tg/BotButtons'
+import { ScheduleDialog, ScheduledList, whenText } from './tg/Scheduling'
 import { LinkCard, Media, PhotoViewer, SafeMessage, formatSize } from './tg/TgMedia'
+import Icon from './tg/Icon'
 
 export { shortTime }
 
@@ -250,13 +254,15 @@ function buildRows(messages) {
 const canEdit = (m, dialog) => m.outgoing && (m.body || m.caption) && !m.forwarded && (dialog.kind === 'saved' || Date.now() - m.at < 48 * 3600e3)
 const canDelete = (m, dialog) => m.outgoing || dialog.kind === 'saved' || dialog.kind === 'person'
 
-function MessageMenu({ at, m, dialog, onClose, onAction }) {
+function MessageMenu({ at, m, dialog, translated, onClose, onAction }) {
   const ref = useRef(null)
   useDismiss(ref, onClose)
   const items = [
     ['reply', 'Reply'],
     m.body || m.caption ? ['copy', 'Copy text'] : null,
+    m.body || m.caption || m.poll ? ['translate', translated ? 'Show original' : 'Translate'] : null,
     ['forward', 'Forward'],
+    ['select', 'Select'],
     dialog.kind !== 'channel' || m.outgoing ? ['pin', m.pinned ? 'Unpin' : 'Pin'] : null,
     canEdit(m, dialog) ? ['edit', 'Edit'] : null,
     m.media && m.media.kind !== 'other' ? ['save', 'Save to computer'] : null,
@@ -267,6 +273,28 @@ function MessageMenu({ at, m, dialog, onClose, onAction }) {
     <div className="msg-menu" ref={ref} role="menu" style={style}>
       {items.map(([id, label]) => (
         <button key={id} type="button" role="menuitem" className={id === 'delete' ? 'is-danger' : ''} onClick={() => onAction(id)}>
+          {label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+function PopMenu({ at, items, onClose }) {
+  const ref = useRef(null)
+  useDismiss(ref, onClose)
+  return (
+    <div className="msg-menu" ref={ref} role="menu" style={{ left: Math.max(8, at.x), top: Math.max(8, at.y) }}>
+      {items.map(([label, fn]) => (
+        <button
+          key={label}
+          type="button"
+          role="menuitem"
+          onClick={() => {
+            onClose()
+            fn()
+          }}
+        >
           {label}
         </button>
       ))}
@@ -337,15 +365,25 @@ function ForwardDialog({ dialogs, onPick, onClose }) {
 
 // ---------- one message ----------
 
-function Bubble({ m, group, dialog, flash, reacting, onReactToggle, onReact, onMenu, onJump, onOpenPhoto }) {
+function Bubble({ m, group, dialog, flash, reacting, onReactToggle, onReact, onMenu, onJump, onOpenPhoto, ctx }) {
   const album = group && group.length > 1
   const sticker = !album && m.media && /^sticker|^round$/.test(m.media.kind) && !m.body
   const text = album ? group.find((x) => x.body) : m
-  const showText = album ? Boolean(text) : m.media ? Boolean(m.caption) : true
+  const showText = m.poll ? false : album ? Boolean(text) : m.media ? Boolean(m.caption) : true
+  const ids = album ? group.map((x) => x.id) : [m.id]
+  const selected = ctx.selected?.has(m.id)
+  const translation = ctx.translations[m.id]
   return (
     <div
       id={`tg-msg-${m.id}`}
-      className={`bubble${m.outgoing ? ' is-out' : ''}${reacting ? ' is-reacting' : ''}${flash ? ' is-flash' : ''}${sticker ? ' is-bare' : ''}${album ? ' is-album' : ''}`}
+      className={`bubble${m.outgoing ? ' is-out' : ''}${reacting ? ' is-reacting' : ''}${flash ? ' is-flash' : ''}${sticker ? ' is-bare' : ''}${album ? ' is-album' : ''}${ctx.selected ? ' is-selecting' : ''}${selected ? ' is-selected' : ''}`}
+      onClickCapture={(e) => {
+        // While selecting, a click picks the message instead of doing what it would normally do.
+        if (!ctx.selected) return
+        e.preventDefault()
+        e.stopPropagation()
+        ctx.onSelect(ids)
+      }}
       onContextMenu={(e) => {
         e.preventDefault()
         onMenu(m, group, { x: e.clientX, y: e.clientY })
@@ -400,14 +438,24 @@ function Bubble({ m, group, dialog, flash, reacting, onReactToggle, onReact, onM
           </SafeMessage>
         )
       )}
+      {m.poll && <PollCard dialogId={dialog.id} m={m} onChanged={ctx.reload} onError={ctx.onError} />}
       {showText && <RichText text={album ? text.body : m.body || m.text} entities={album ? text.entities : m.entities} />}
+      {translation && (
+        <div className="translation">
+          <span className="mono accent small">Translated</span>
+          <span className="bubble-text">{translation}</span>
+        </div>
+      )}
+      {m.buttons?.type === 'inline' && <InlineButtons dialogId={dialog.id} m={m} onNote={ctx.onNote} onAlert={ctx.onAlert} onError={ctx.onError} />}
       {m.link && !m.media && (
         <SafeMessage>
           <LinkCard dialogId={dialog.id} m={m} />
         </SafeMessage>
       )}
       <Reactions m={m} onReact={onReact} />
+      {ctx.selected && <span className={`select-mark${selected ? ' on' : ''}`} aria-hidden="true">{selected ? '✓' : ''}</span>}
       <span className="bubble-time mono">
+        {m.silent && <span title="Sent without sound">🔕 </span>}
         {m.pinned && <span title="Pinned">📌 </span>}
         {m.edited && 'edited · '}
         {shortClock(m.at)}
@@ -459,6 +507,16 @@ function Conversation({ dialog, dialogs, ai, draft, onToggleAi, refreshTick }) {
   const [dragging, setDragging] = useState(false)
   const [recording, setRecording] = useState(false)
   const [infoOpen, setInfoOpen] = useState(false)
+  const [translations, setTranslations] = useState({})
+  const [selected, setSelected] = useState(null) // a Set of message ids while selecting, else null
+  const [pollOpen, setPollOpen] = useState(false)
+  const [plusMenu, setPlusMenu] = useState(null)
+  const [sendMenu, setSendMenu] = useState(null)
+  const [scheduling, setScheduling] = useState(false)
+  const [scheduledOpen, setScheduledOpen] = useState(false)
+  const [scheduledCount, setScheduledCount] = useState(0)
+  const [keyboardOpen, setKeyboardOpen] = useState(true)
+  const [alertText, setAlertText] = useState(null)
   const inputRef = useRef(null)
   const listRef = useRef(null)
   const stick = useRef(true)
@@ -484,6 +542,7 @@ function Conversation({ dialog, dialogs, ai, draft, onToggleAi, refreshTick }) {
 
   const refreshHeader = useCallback(() => {
     window.iv.telegram.chatInfo(dialog.id).then(setInfo).catch(() => {})
+    window.iv.telegram.scheduled(dialog.id).then((l) => setScheduledCount(l.length)).catch(() => setScheduledCount(0))
     window.iv.telegram.pinned(dialog.id).then(setPinned).catch(() => {})
   }, [dialog.id])
 
@@ -690,7 +749,18 @@ function Conversation({ dialog, dialogs, ai, draft, onToggleAi, refreshTick }) {
       } else if (action === 'copy') {
         await window.iv.app.copy(m.body || m.caption || '')
         say('Copied.')
-      } else if (action === 'forward') setForwarding(ids)
+      } else if (action === 'translate') {
+        if (translations[m.id]) return setTranslations((t) => ({ ...t, [m.id]: undefined }))
+        try {
+          const lang = (navigator.language || 'en').slice(0, 2)
+          const [out] = await window.iv.telegram.translate(dialog.id, [m.id], lang)
+          if (out) setTranslations((t) => ({ ...t, [m.id]: out }))
+          else say("Telegram didn't return a translation.")
+        } catch (err) {
+          setError(/PREMIUM|TRANSLAT/i.test(String(err)) ? "Telegram didn't translate this. Translating may need Telegram Premium on your account." : clean(err))
+        }
+      } else if (action === 'select') setSelected(new Set(ids))
+      else if (action === 'forward') setForwarding(ids)
       else if (action === 'pin') {
         await window.iv.telegram.pin(dialog.id, m.id, m.pinned)
         setMessages((list) => list.map((x) => (x.id === m.id ? { ...x, pinned: !m.pinned } : x)))
@@ -709,6 +779,7 @@ function Conversation({ dialog, dialogs, ai, draft, onToggleAi, refreshTick }) {
     try {
       await window.iv.telegram.remove(dialog.id, ids, everyone)
       setMessages((list) => list.filter((x) => !ids.includes(x.id)))
+      setSelected(null)
     } catch (err) {
       setError(clean(err))
     }
@@ -719,6 +790,7 @@ function Conversation({ dialog, dialogs, ai, draft, onToggleAi, refreshTick }) {
     setForwarding(null)
     try {
       await window.iv.telegram.forward(dialog.id, ids, to.id)
+      setSelected(null)
       say(`Forwarded to ${to.name}.`)
       if (to.id === dialog.id) load()
     } catch (err) {
@@ -793,7 +865,8 @@ function Conversation({ dialog, dialogs, ai, draft, onToggleAi, refreshTick }) {
     }
   }
 
-  const send = async () => {
+  // `extra` can ask for no notification sound ({ silent }) or a later time ({ schedule }).
+  const send = async (extra = {}) => {
     const body = text.trim()
     if ((!body && !attachment) || sending) return
     setSending(true)
@@ -806,7 +879,7 @@ function Conversation({ dialog, dialogs, ai, draft, onToggleAi, refreshTick }) {
         setText('')
         return
       }
-      const opts = { replyTo: replyTo?.id }
+      const opts = { replyTo: replyTo?.id, silent: Boolean(extra.silent), schedule: extra.schedule || 0 }
       // With a file attached, the text goes with it as its caption.
       if (attachment) await window.iv.telegram.sendFile(dialog.id, attachment.token, body, opts)
       else await window.iv.telegram.send(dialog.id, body, opts)
@@ -815,6 +888,11 @@ function Conversation({ dialog, dialogs, ai, draft, onToggleAi, refreshTick }) {
       setText('')
       setFromAi(false)
       window.iv.ai.clearDraft(key)
+      if (opts.schedule) {
+        say(`Scheduled for ${whenText(opts.schedule)}.`)
+        setScheduledCount((n) => n + 1)
+        return
+      }
       if (detachedRef.current) await toLatest()
       stick.current = true
       await load()
@@ -824,6 +902,55 @@ function Conversation({ dialog, dialogs, ai, draft, onToggleAi, refreshTick }) {
       setSending(false)
     }
   }
+
+  const sendKeyboardText = async (label) => {
+    setError(null)
+    try {
+      await window.iv.telegram.send(dialog.id, label)
+      if (keyboard?.buttons.single) setKeyboardOpen(false)
+      stick.current = true
+      await load()
+    } catch (err) {
+      setError(`Couldn't send: ${clean(err)}`)
+    }
+  }
+
+  const sendPoll = async (poll) => {
+    await window.iv.telegram.sendPoll(dialog.id, poll, { replyTo: replyTo?.id })
+    setPollOpen(false)
+    setReplyTo(null)
+    stick.current = true
+    await load()
+  }
+
+  // Selected messages: forward, delete or copy them together.
+  const toggleSelect = (ids) =>
+    setSelected((cur) => {
+      const next = new Set(cur || [])
+      const on = ids.every((i) => next.has(i))
+      ids.forEach((i) => (on ? next.delete(i) : next.add(i)))
+      return next.size ? next : null
+    })
+  const selectedList = selected ? messages.filter((x) => selected.has(x.id)) : []
+  // Messages that disappear (deleted here or elsewhere) drop out of the selection.
+  useEffect(() => {
+    if (!selected) return
+    const here = new Set(messages.map((x) => x.id))
+    if ([...selected].some((i) => !here.has(i))) setSelected((cur) => {
+      const next = new Set([...(cur || [])].filter((i) => here.has(i)))
+      return next.size ? next : null
+    })
+  }, [messages, selected])
+  useEffect(() => {
+    if (!selected) return
+    const esc = (e) => e.key === 'Escape' && setSelected(null)
+    window.addEventListener('keydown', esc)
+    return () => window.removeEventListener('keydown', esc)
+  }, [selected])
+
+  // The latest bot keyboard in the chat, unless a bot has since taken it away.
+  const keyboard = [...messages].reverse().find((x) => !x.outgoing && (x.buttons?.type === 'keyboard' || x.buttons?.type === 'hide'))
+  const showKeyboard = keyboard?.buttons.type === 'keyboard'
 
   // A recorded voice message, sent by the person's own Send click in the recording bar.
   const sendVoice = async (bytes, wave) => {
@@ -870,10 +997,10 @@ function Conversation({ dialog, dialogs, ai, draft, onToggleAi, refreshTick }) {
           {typing ? <span className="mono typing">{typing.text}…</span> : <span className={`mono dim${info.subtitle === 'online' ? ' is-online' : ''}`}>{info.subtitle || dialog.kind}</span>}
         </div>
         <button type="button" className={`btn btn-quiet head-btn${searchOpen ? ' is-on' : ''}`} onClick={() => setSearchOpen((v) => !v)} title="Search this chat" aria-label="Search this chat">
-          ⌕
+          <Icon name="search" />
         </button>
         <button type="button" className={`btn btn-quiet head-btn${infoOpen ? ' is-on' : ''}`} onClick={() => setInfoOpen((v) => !v)} title="Chat info, shared media and files" aria-label="Chat info">
-          ⓘ
+          <Icon name="info" />
         </button>
         <label className="toggle toggle-inline" title="Whether your AI (Codex or Claude) can read this chat and draft replies">
           <span className="toggle-label small">AI can see this chat</span>
@@ -949,6 +1076,7 @@ function Conversation({ dialog, dialogs, ai, draft, onToggleAi, refreshTick }) {
               onMenu={(m, group, at) => setMenu({ m, group, at })}
               onJump={jumpTo}
               onOpenPhoto={setViewer}
+              ctx={{ selected, onSelect: toggleSelect, translations, reload: load, onNote: say, onAlert: setAlertText, onError: setError }}
             />
           )
         )}
@@ -984,7 +1112,7 @@ function Conversation({ dialog, dialogs, ai, draft, onToggleAi, refreshTick }) {
             <span className="mono accent">{editing ? 'Editing' : `Replying to ${replyTo.outgoing ? 'yourself' : replyTo.from || dialog.name}`}</span>
             <span className="compose-context-text">{(editing || replyTo).text}</span>
             <button type="button" className="attach-remove" onClick={cancelCompose} aria-label={editing ? 'Stop editing' : 'Cancel the reply'}>
-              ×
+              <Icon name="close" size={14} />
             </button>
           </div>
         )}
@@ -998,20 +1126,63 @@ function Conversation({ dialog, dialogs, ai, draft, onToggleAi, refreshTick }) {
             <span className="attach-name">{attachment.name}</span>
             <span className="mono dim">{formatSize(attachment.size)}</span>
             <button type="button" className="attach-remove" onClick={() => setAttachment(null)} aria-label="Remove the attachment">
-              ×
+              <Icon name="close" size={14} />
             </button>
           </div>
         )}
-        {recording ? (
+        {showKeyboard && keyboardOpen && !selected && !recording && <BotKeyboard markup={keyboard.buttons} onPress={sendKeyboardText} />}
+        {selected ? (
+          <div className="select-bar">
+            <span className="mono">{selected.size} selected</span>
+            <button type="button" className="btn btn-quiet" onClick={async () => {
+              const lines = selectedList.map((x) => (dialog.kind === 'person' || dialog.kind === 'saved' ? x.body || x.text : `${x.from || dialog.name}: ${x.body || x.text}`))
+              await window.iv.app.copy(lines.join('\n'))
+              say('Copied.')
+            }}>
+              Copy
+            </button>
+            <button type="button" className="btn btn-quiet" onClick={() => setForwarding([...selected])}>
+              Forward
+            </button>
+            {selectedList.every((x) => canDelete(x, dialog)) && (
+              <button type="button" className="btn btn-quiet is-danger" onClick={() => setConfirmDelete({ ids: [...selected], outgoing: selectedList.every((x) => x.outgoing) })}>
+                Delete
+              </button>
+            )}
+            <button type="button" className="btn btn-quiet" onClick={() => setSelected(null)}>
+              Cancel
+            </button>
+          </div>
+        ) : recording ? (
           <VoiceRecorder onSend={sendVoice} onCancel={() => setRecording(false)} onError={setError} />
         ) : (
         <div className="composer-row">
-          <button type="button" className="btn btn-quiet attach-btn" onClick={attach} disabled={Boolean(editing)} title="Attach a picture or file (or drop one on the chat)" aria-label="Attach a picture or file">
-            +
+          <button
+            type="button"
+            className="btn btn-quiet attach-btn"
+            onClick={(e) => {
+              const r = e.currentTarget.getBoundingClientRect()
+              setPlusMenu({ x: r.left, y: r.top - 92 })
+            }}
+            disabled={Boolean(editing)}
+            title="Send a picture, file or poll (or drop a file on the chat)"
+            aria-label="Attach"
+          >
+            <Icon name="plus" size={20} />
           </button>
+          {scheduledCount > 0 && (
+            <button type="button" className="btn btn-quiet attach-btn" onClick={() => setScheduledOpen(true)} title={`${scheduledCount} scheduled`} aria-label={`${scheduledCount} scheduled messages`}>
+              <Icon name="clock" />
+            </button>
+          )}
+          {showKeyboard && (
+            <button type="button" className={`btn btn-quiet attach-btn${keyboardOpen ? ' is-on' : ''}`} onClick={() => setKeyboardOpen((v) => !v)} title="Bot keyboard" aria-label="Bot keyboard">
+              <Icon name="keyboard" />
+            </button>
+          )}
           <div className="emoji-wrap">
             <button type="button" className="btn btn-quiet attach-btn" onClick={() => setPicker((v) => !v)} title="Emoji" aria-label="Emoji" aria-expanded={picker}>
-              😊
+              <Icon name="smile" />
             </button>
             {picker && <EmojiPicker onPick={insertEmoji} onClose={() => setPicker(false)} />}
           </div>
@@ -1058,16 +1229,54 @@ function Conversation({ dialog, dialogs, ai, draft, onToggleAi, refreshTick }) {
               </svg>
             </button>
           ) : (
-            <button type="button" className="btn btn-primary" onClick={send} disabled={(!text.trim() && !attachment) || sending}>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => send()}
+              onContextMenu={(e) => {
+                if (editing) return
+                e.preventDefault()
+                setSendMenu({ x: e.clientX - 160, y: e.clientY - 84 })
+              }}
+              disabled={(!text.trim() && !attachment) || sending}
+              title={editing ? undefined : 'Right-click to send without sound or later'}
+            >
               {editing ? 'Save' : 'Send'}
             </button>
           )}
         </div>
         )}
       </div>
-      {menu && <MessageMenu at={menu.at} m={menu.m} dialog={dialog} onClose={() => setMenu(null)} onAction={onAction} />}
+      {menu && <MessageMenu at={menu.at} m={menu.m} dialog={dialog} translated={Boolean(translations[menu.m.id])} onClose={() => setMenu(null)} onAction={onAction} />}
       {confirmDelete && <DeleteDialog count={confirmDelete.ids.length} dialog={dialog} outgoing={confirmDelete.outgoing} onConfirm={doDelete} onClose={() => setConfirmDelete(null)} />}
       {forwarding && <ForwardDialog dialogs={dialogs} onPick={doForward} onClose={() => setForwarding(null)} />}
+      {plusMenu && (
+        <PopMenu at={plusMenu} onClose={() => setPlusMenu(null)} items={[['Photo or file', attach], ['Poll', () => setPollOpen(true)]]} />
+      )}
+      {sendMenu && (
+        <PopMenu at={sendMenu} onClose={() => setSendMenu(null)} items={[['Send without sound', () => send({ silent: true })], ['Schedule message…', () => setScheduling(true)]]} />
+      )}
+      {scheduling && (
+        <ScheduleDialog
+          onClose={() => setScheduling(false)}
+          onSchedule={(at) => {
+            setScheduling(false)
+            send({ schedule: at })
+          }}
+        />
+      )}
+      {scheduledOpen && <ScheduledList dialogId={dialog.id} onClose={() => setScheduledOpen(false)} onChanged={() => { window.iv.telegram.scheduled(dialog.id).then((l) => setScheduledCount(l.length)).catch(() => {}); load() }} />}
+      {pollOpen && <PollDialog onSend={sendPoll} onClose={() => setPollOpen(false)} />}
+      {alertText && (
+        <Modal title="Bot" onClose={() => setAlertText(null)}>
+          <p>{alertText}</p>
+          <div className="row-actions">
+            <button type="button" className="btn btn-primary" onClick={() => setAlertText(null)}>
+              OK
+            </button>
+          </div>
+        </Modal>
+      )}
       {infoOpen && <InfoPanel dialog={dialog} onClose={() => setInfoOpen(false)} onJump={jumpTo} onOpenPhoto={setViewer} onError={setError} />}
       {viewer && <PhotoViewer dialogId={dialog.id} msgId={viewer.msgId} preview={viewer.preview} onClose={() => setViewer(null)} />}
     </div>

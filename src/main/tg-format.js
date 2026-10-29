@@ -25,7 +25,7 @@ const num = (v) => Number(String(v ?? 0))
 // sticker or file. Link previews are separate (see linkPreview).
 export function mediaInfo(msg) {
   const media = msg.media
-  if (!media || media.className === 'MessageMediaWebPage') return null
+  if (!media || media.className === 'MessageMediaWebPage' || media.className === 'MessageMediaPoll') return null
   if (media.className === 'MessageMediaPhoto') {
     if (!media.photo || media.photo.className === 'PhotoEmpty') return { kind: 'other', label: 'Photo (expired)' }
     const sizes = (media.photo.sizes || []).filter((s) => s.w && s.h)
@@ -96,6 +96,7 @@ const MEDIA_WORD = { photo: 'Photo', video: 'Video', gif: 'GIF', 'gif-file': 'GI
 // One line of text standing for a message: its text, or what it carries.
 export function messageText(msg) {
   if (msg.message) return msg.message
+  if (msg.media?.className === 'MessageMediaPoll') return `📊 ${textOf(msg.media.poll?.question) || 'Poll'}`
   const info = mediaInfo(msg)
   if (info) {
     const word = info.kind === 'other' ? info.label : MEDIA_WORD[info.kind] || 'Media'
@@ -316,4 +317,72 @@ export function inFolder(rules, d) {
 // archived chats don't, and a chat marked unread does.
 export function countsAsUnread(d) {
   return Boolean((d.unread > 0 || d.unreadMark) && !d.muted && !d.archived)
+}
+
+// ---------- polls and bot buttons ----------
+
+const b64 = (bytes) => (bytes ? Buffer.from(bytes).toString('base64') : '')
+const textOf = (t) => (typeof t === 'string' ? t : t?.text || '')
+
+// A poll: its question, each answer with its votes and share, which you chose, and (in quizzes) which is right.
+export function pollInfo(msg) {
+  const media = msg.media
+  if (media?.className !== 'MessageMediaPoll' || !media.poll) return null
+  const p = media.poll
+  const res = media.results || {}
+  const byOption = new Map((res.results || []).map((r) => [b64(r.option), r]))
+  const total = res.totalVoters || 0
+  const answers = (p.answers || []).map((a) => {
+    const r = byOption.get(b64(a.option))
+    const voters = r?.voters || 0
+    return { text: textOf(a.text), option: b64(a.option), voters, percent: total ? Math.round((voters / total) * 100) : 0, chosen: Boolean(r?.chosen), correct: Boolean(r?.correct) }
+  })
+  return {
+    question: textOf(p.question),
+    answers,
+    total,
+    voted: answers.some((a) => a.chosen),
+    closed: Boolean(p.closed),
+    quiz: Boolean(p.quiz),
+    multiple: Boolean(p.multipleChoice),
+    anonymous: !p.publicVoters,
+    solution: res.solution || ''
+  }
+}
+
+// The buttons a bot put on a message (inline) or on your keyboard (reply keyboard).
+const BUTTON_KIND = {
+  KeyboardButtonCallback: 'callback',
+  KeyboardButtonUrl: 'url',
+  KeyboardButtonUrlAuth: 'url',
+  KeyboardButtonWebView: 'url',
+  KeyboardButtonSimpleWebView: 'url',
+  KeyboardButton: 'text',
+  KeyboardButtonGame: 'callback',
+  KeyboardButtonSwitchInline: 'other',
+  KeyboardButtonRequestPhone: 'other',
+  KeyboardButtonRequestGeoLocation: 'other',
+  KeyboardButtonRequestPoll: 'other',
+  KeyboardButtonRequestPeer: 'other',
+  KeyboardButtonBuy: 'other',
+  KeyboardButtonCopy: 'copy'
+}
+
+export function markupInfo(msg) {
+  const m = msg.replyMarkup
+  if (!m) return null
+  if (m.className === 'ReplyKeyboardHide') return { type: 'hide' }
+  if (m.className !== 'ReplyInlineMarkup' && m.className !== 'ReplyKeyboardMarkup') return null
+  const rows = (m.rows || []).map((row) =>
+    (row.buttons || []).map((b) => {
+      const kind = BUTTON_KIND[b.className] || 'other'
+      const out = { text: b.text || '', kind }
+      if (kind === 'callback') out.data = b64(b.data)
+      if (kind === 'url') out.url = b.url || ''
+      if (kind === 'copy') out.copy = b.copyText || ''
+      if (b.className === 'KeyboardButtonGame') out.game = true
+      return out
+    })
+  )
+  return { type: m.className === 'ReplyInlineMarkup' ? 'inline' : 'keyboard', rows, resize: Boolean(m.resize), single: Boolean(m.singleUse), placeholder: m.placeholder || '' }
 }

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { aiCanSee, chatKey } from '../../../../main/ai-access.js'
 import { countsAsUnread } from '../../../../main/tg-format.js'
 import { TelegramAvatar } from '../Avatar'
+import Icon from './Icon'
 
 // The Telegram chat list, like Telegram Desktop's: your folders as tabs, pinned chats first, an "Archived
 // chats" row, search across your chats plus people and public groups, a right-click menu for each chat
@@ -294,7 +295,7 @@ export default function ChatList({ dialogs, ai, drafts, openId, onOpen, onError 
       )}
       {archive && (
         <button type="button" className="tg-back" onClick={() => setArchive(false)}>
-          ← Archived chats
+          <Icon name="back" size={16} /> Archived chats
         </button>
       )}
       <ul className="tg-list" aria-label="Telegram chats">
