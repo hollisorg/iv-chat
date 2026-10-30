@@ -39,6 +39,14 @@ export function accessDecision(choice, granted) {
   return typeof granted === 'boolean' ? granted : null
 }
 
+// What a site is told when it only checks the permission (navigator.permissions.query) before asking.
+// Electron can only answer yes or no, not "ask", and WhatsApp Web takes no as final: it shows its own
+// "Allow microphone" help and never makes the request, so IV Chat's question never appears. So anything
+// that isn't blocked counts as yes here; the request itself still asks when the choice is Ask.
+export function checkAnswer(decision) {
+  return decision !== false
+}
+
 // The device with this name among `devices` (from enumerateDevices), or null for Windows' default.
 export function matchDevice(devices, kind, name) {
   if (!name) return null

@@ -6,7 +6,7 @@ import { Menu, WebContentsView, clipboard, dialog, session, shell } from 'electr
 import { EventEmitter } from 'node:events'
 import path from 'node:path'
 import { SERVICES, PANEL_IDS, READS_CHATS, chromeUserAgent, hostAllowed, parseUnread, popupAllowed } from './services'
-import { MEDIA_DEFAULTS, accessDecision } from './media-settings.js'
+import { MEDIA_DEFAULTS, accessDecision, checkAnswer } from './media-settings.js'
 
 // Chromium's code for a navigation that was replaced by another one; not a real failure.
 const ERR_ABORTED = -3
@@ -153,7 +153,7 @@ export class Panels extends EventEmitter {
       if (permission === 'speaker-selection') return media() === true
       return false
     }
-    ses.setPermissionCheckHandler((_wc, permission) => decide(permission) === true)
+    ses.setPermissionCheckHandler((_wc, permission) => (permission === 'media' ? checkAnswer(media()) : decide(permission) === true))
     ses.setPermissionRequestHandler(async (_wc, permission, callback, details) => {
       const known = decide(permission)
       if (known !== null) return callback(known)

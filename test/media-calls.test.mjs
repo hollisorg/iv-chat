@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { MEDIA_DEFAULTS, accessDecision, cleanMedia, matchDevice } from '../src/main/media-settings.js'
+import { MEDIA_DEFAULTS, accessDecision, checkAnswer, cleanMedia, matchDevice } from '../src/main/media-settings.js'
 import { callEvent, callText, isMissedCall, serviceText } from '../src/main/tg-format.js'
 import { installDeviceChoice } from '../src/main/device-choice.js'
 
@@ -27,6 +27,13 @@ test('accessDecision: Allow and Block decide, Ask uses this run\'s answer or ask
   assert.equal(accessDecision('ask', undefined), null)
   assert.equal(accessDecision('ask', true), true)
   assert.equal(accessDecision('ask', false), false)
+})
+
+test('checkAnswer: a site checking first hears yes unless blocked, so Ask can still ask', () => {
+  assert.equal(checkAnswer(accessDecision('ask', undefined)), true)
+  assert.equal(checkAnswer(accessDecision('allow')), true)
+  assert.equal(checkAnswer(accessDecision('block')), false)
+  assert.equal(checkAnswer(accessDecision('ask', false)), false)
 })
 
 test('matchDevice finds a device by name and kind, or gives Windows\' default', () => {
