@@ -1,11 +1,11 @@
 <p align="center">
-  <img src="src/renderer/src/assets/chat-art.webp" alt="IV Chat: your chats in one place" width="100%">
+  <img src=".github/images/banner.png" alt="IV Chat: WhatsApp, Messenger, Instagram, LinkedIn and Telegram in one window" width="100%">
 </p>
 
 <p align="center">
   <a href="https://github.com/hollisorg/iv-chat/releases/latest/download/IV-Chat-Setup.exe"><b>Download for Windows</b></a>
   &nbsp;·&nbsp;
-  <a href="#install">Install</a>
+  <a href="#what-you-need">What you need</a>
   &nbsp;·&nbsp;
   <a href="https://github.com/hollisorg/iv-chat/releases/latest">Release notes</a>
   &nbsp;·&nbsp;
@@ -17,6 +17,10 @@
 A free Infinite Variance desktop app that puts WhatsApp, Messenger, Instagram, LinkedIn and Telegram in
 one window. Your own Codex or Claude can read the chats you choose, tell you what came in and draft
 replies, but nothing is ever sent for you: a message only goes when you press Enter or Send.
+
+<p align="center">
+  <img src=".github/images/telegram.png" alt="A Telegram group chat in IV Chat with a voice message, a poll and reactions, next to the chat list with folders" width="100%">
+</p>
 
 ## What it does
 
@@ -61,6 +65,25 @@ replies, but nothing is ever sent for you: a message only goes when you press En
 - **Stays in the background.** Closing the window keeps IV Chat in the tray, with notifications for new
   messages. It updates itself.
 
+<table>
+  <tr>
+    <td width="50%"><img src=".github/images/updates.png" alt="Updates: the latest messages from Telegram, WhatsApp and Messenger in one list"></td>
+    <td width="50%"><img src=".github/images/call.png" alt="A Telegram call ringing at the top of the window while a drafted reply waits in the reply box"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>What came in, from every app, in one list</sub></td>
+    <td align="center"><sub>A drafted reply for you to send, and a call ringing</sub></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src=".github/images/devices.png" alt="Calls and devices: microphone, camera and speaker, and Ask, Allow or Block for each service"></td>
+    <td width="50%"><img src=".github/images/ai.png" alt="Your AI: access on or off, which chats it can see, and Codex or Claude connected"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>Your microphone, camera and speaker, and who may use them</sub></td>
+    <td align="center"><sub>Your AI sees only the chats you share</sub></td>
+  </tr>
+</table>
+
 ## What stays private
 
 - Your sign-ins stay on this computer. Telegram's session and app keys are stored encrypted with Windows'
@@ -95,6 +118,8 @@ IV Chat checks for a new version when it opens and every six hours, downloads it
 installs it when you click **Update** in the top bar or quit. Your settings are kept in
 `%APPDATA%\IV Chat`.
 
+---
+
 ## Develop
 
 ```bash
@@ -116,3 +141,5 @@ Variance's own and aren't covered by the MIT licence. Third-party notices are in
 
 IV Chat isn't affiliated with or endorsed by Meta, WhatsApp, Instagram, LinkedIn, Telegram, OpenAI or
 Anthropic. Each service's own terms apply to your use of it.
+
+Every chat, name and message in the screenshots is invented.
