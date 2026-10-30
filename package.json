@@ -1,7 +1,7 @@
 {
   "name": "iv-chat",
   "productName": "IV Chat",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Infinite Variance chat hub: WhatsApp, Messenger, Instagram, LinkedIn and Telegram in one place, with your AI drafting replies you send.",
   "author": "Infinite Variance",
   "private": true,
