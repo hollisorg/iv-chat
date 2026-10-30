@@ -7,10 +7,12 @@ import { SERVICES, PANEL_IDS, sanitizeChats, totalUnread } from './services'
 import { applyPatch, loadSettings, saveSettings } from './settings'
 import { initUpdater, updateState } from './updater'
 import { TelegramService } from './telegram'
+import { checkUnlock, forgetLocked } from './secure-store'
 import { MediaCache, SCHEME as MEDIA_SCHEME, mediaUrl } from './tg-media.js'
 import { webmToOgg } from './ogg-opus.js'
 import { countsAsUnread } from './tg-format.js'
 import { RateLimiter, setChatAccess } from './ai-access.js'
+import { accessDecision } from './media-settings.js'
 import { createTools } from './mcp-tools.js'
 import { startMcpPipe } from './mcp-pipe'
 import * as connectors from './connectors.js'
@@ -35,6 +37,8 @@ app.setAppUserModelId(app.isPackaged ? 'ai.infinitevariance.chat' : 'ai.infinite
 const VIEWS = ['updates', 'telegram', ...PANEL_IDS, 'settings']
 const resource = (name) => path.join(app.getAppPath(), 'resources', name)
 const startHidden = process.argv.includes('--hidden')
+// Set on the one automatic restart IV Chat makes when it can't unlock its saved sign-ins (see unlockAtStart).
+const UNLOCK_RETRY = '--unlock-retry'
 
 let settings
 let win = null
@@ -44,12 +48,17 @@ let updater = null
 let quitting = false
 let activeView = 'updates'
 let telegram = null
+let unlock = 'ok' // 'locked' while the saved sign-ins can't be opened; see unlockAtStart()
 const activity = [] // the AI's recent tool calls, without message text; memory only
 const aiDrafts = {} // chat key -> latest AI draft, shown in the Telegram reply box
 const pickedFiles = new Map() // token -> file the person picked to send in Telegram
 
+// The window is destroyed while quitting, but panels and Telegram can still fire events for a moment.
+const alive = () => Boolean(win && !win.isDestroyed())
+const inFront = (view) => alive() && win.isVisible() && win.isFocused() && (view === undefined || activeView === view)
+
 function send(channel, payload) {
-  if (win && !win.isDestroyed()) win.webContents.send(channel, payload)
+  if (alive()) win.webContents.send(channel, payload)
 }
 
 // ---------- window ----------
@@ -77,6 +86,7 @@ function createWindow() {
   win.once('ready-to-show', () => {
     if (!startHidden) win.show()
   })
+  guardOwnMedia(win.webContents.session)
 
   // The app's own UI never navigates; external links open in the real browser.
   win.webContents.setWindowOpenHandler(({ url }) => {
@@ -114,12 +124,45 @@ function createWindow() {
     win.loadFile(path.join(__dirname, '../renderer/index.html'))
   }
 
+  panels.setMedia(settings.media)
+  panels.locked = unlock === 'locked'
   panels.sync(settings)
   panels.setReader(settings.latestMessages)
 }
 
+// IV Chat's own window (Telegram, voice messages, the Settings device tests) follows the "Telegram and IV Chat"
+// choice in Settings > Calls and devices. Other permissions keep Electron's defaults for the app's own page.
+let ownMediaGrant = null
+function guardOwnMedia(ses) {
+  const media = () => accessDecision(settings.media.access.telegram, ownMediaGrant)
+  // Checks decide whether IV Chat's own page sees device names (to find the chosen microphone, camera and
+  // speaker); they stay visible unless blocked. Actually opening the microphone or camera is a request (below).
+  ses.setPermissionCheckHandler((_wc, permission) => {
+    if (permission === 'media' || permission === 'speaker-selection') return media() !== false
+    return true
+  })
+  ses.setPermissionRequestHandler(async (_wc, permission, callback, details) => {
+    if (permission === 'speaker-selection') return callback(media() !== false)
+    if (permission !== 'media') return callback(true)
+    const known = media()
+    if (known !== null) return callback(known)
+    const what = (details.mediaTypes || []).join(' and ') || 'microphone or camera'
+    const { response } = await dialog.showMessageBox(win, {
+      type: 'question',
+      buttons: ['Allow', 'Block'],
+      defaultId: 0,
+      cancelId: 1,
+      title: 'IV Chat',
+      message: `IV Chat wants to use your ${what}.`,
+      detail: 'For Telegram voice messages and the device tests in Settings. This lasts until IV Chat is closed. To decide for good, choose Allow or Block in Settings > Calls and devices.'
+    })
+    ownMediaGrant = response === 0
+    callback(ownMediaGrant)
+  })
+}
+
 function showWindow() {
-  if (!win) return
+  if (!alive()) return
   if (win.isMinimized()) win.restore()
   win.show()
   win.focus()
@@ -136,7 +179,7 @@ function selectView(view) {
 const telegramUnread = () => (telegram?.status === 'ready' ? telegram.dialogList().filter(countsAsUnread).length : 0)
 
 function refreshUnread() {
-  if (!win || !tray) return
+  if (!alive() || !tray || tray.isDestroyed()) return
   const total = totalUnread(panels.states) + telegramUnread()
   win.setTitle(total ? `IV Chat (${total})` : 'IV Chat')
   if (process.platform === 'win32') {
@@ -197,8 +240,7 @@ function notify(title, body, onClick) {
 // The count comes from the site's tab title, which counts unread chats. No message content is read.
 function onNewMessages(id, unread) {
   if (!settings.notifications) return
-  const looking = win.isVisible() && win.isFocused() && activeView === id
-  if (looking) return
+  if (inFront(id)) return
   const name = SERVICES[id].name
   notify(name, unread === 1 ? 'You have a new message.' : `You have new messages in ${unread} chats.`, () => {
     showWindow()
@@ -217,6 +259,8 @@ function updateSettings(patch) {
   }
   panels?.sync(settings)
   panels?.setReader(settings.latestMessages)
+  panels?.setMedia(settings.media)
+  if (settings.media.access.telegram === 'ask' && before.media.access.telegram !== 'ask') ownMediaGrant = null
   return settings
 }
 
@@ -229,8 +273,32 @@ function registerIpc() {
   ipcMain.on('panel:chats', (e, payload) => panels.chatsFrom(e.sender.id, sanitizeChats(payload)))
   // Answers from WhatsApp assisted mode; panels.assistReply checks they come from the panel that was asked.
   ipcMain.on('assist:reply', (e, payload) => panels.assistReply(e.sender.id, payload))
+  // A panel page asks, as it loads, which microphone, camera and speaker were chosen (names only).
+  ipcMain.on('panel:media', (e) => {
+    e.returnValue = panels.wantedDevices()
+  })
 
   ipcMain.handle('app:copy', (_e, text) => clipboard.writeText(String(text ?? '').slice(0, 20000)))
+
+  // Saved sign-ins that couldn't be unlocked at startup (see unlockAtStart): restart, or start over.
+  ipcMain.handle('app:unlock', () => unlockState())
+  ipcMain.handle('app:restart', (e) => {
+    fromWindow(e)
+    restartApp(false)
+  })
+  // The person chose to sign in again rather than restart: removes only the saved sign-ins that can't be
+  // opened (website panels lose theirs too, since their cookies use the same key).
+  ipcMain.handle('app:startOver', (e) => {
+    fromWindow(e)
+    unlock = forgetLocked()
+    if (unlock !== 'locked') {
+      panels.locked = false
+      panels.sync(settings)
+      telegram.start()
+    }
+    send('app:unlock', unlockState())
+    return unlockState()
+  })
 
   // Refresh everything: Telegram's chat list and every website panel.
   ipcMain.handle('app:refreshAll', async () => {
@@ -427,6 +495,11 @@ function registerIpc() {
     await telegram.forwardFromPerson(tgId(fromId), ids(msgIds), tgId(toId))
   })
   // Polls, bot buttons and scheduled messages: also only from the person's clicks.
+  // Declining a ringing call: only from the person's click on the call banner.
+  ipcMain.handle('telegram:declineCall', async (e, callId) => {
+    fromWindow(e)
+    await telegram.declineCall(String(callId).slice(0, 30))
+  })
   ipcMain.handle('telegram:vote', async (e, id, msgId, options) => {
     fromWindow(e)
     await telegram.voteFromPerson(tgId(id), Number(msgId), (Array.isArray(options) ? options : []).map(String).slice(0, 10))
@@ -657,7 +730,7 @@ function startAi() {
         send('ai:draft', { key, text })
       }
       const name = service === 'whatsapp' ? 'WhatsApp' : 'Telegram'
-      if (settings.notifications && !(win.isVisible() && win.isFocused() && activeView === service)) {
+      if (settings.notifications && !inFront(service)) {
         notify('Draft ready', `Your AI drafted a reply in ${name}. Review it and press Enter to send.`, () => {
           showWindow()
           selectView(service)
@@ -682,9 +755,26 @@ function startTelegram() {
   telegram.on('typing', (t) => send('telegram:typing', t))
   telegram.on('folders', (f) => send('telegram:folders', f))
   telegram.on('status', (id) => send('telegram:status', id))
+  // Someone calling: the banner in the window (which rings), plus a notification if the window isn't in front.
+  telegram.on('call', (c) => {
+    send('telegram:call', c)
+    if (c.state !== 'ringing' || !settings.notifications) return
+    if (inFront()) return
+    notify(c.name ? `${c.name} is calling` : 'Incoming Telegram call', `Telegram ${c.video ? 'video call' : 'call'}. Answer on your phone or in Telegram Desktop.`, () => {
+      showWindow()
+    })
+  })
+  telegram.on('missed-call', ({ chat_id, name }) => {
+    if (!settings.notifications) return
+    notify('Telegram', name ? `Missed call from ${name}` : 'Missed call', () => {
+      showWindow()
+      selectView('telegram')
+      send('telegram:open', chat_id)
+    })
+  })
   telegram.on('incoming', ({ chat_id, name }) => {
     if (!settings.notifications) return
-    if (win.isVisible() && win.isFocused() && activeView === 'telegram') return
+    if (inFront('telegram')) return
     notify('Telegram', name ? `New message from ${name}` : 'You have a new message.', () => {
       showWindow()
       selectView('telegram')
@@ -698,8 +788,31 @@ function startTelegram() {
 
 app.on('second-instance', showWindow)
 
+// Saved sign-ins (Telegram's, and the website panels' cookies) are locked with one Windows-protected key.
+// Once, right after a Windows restart, IV Chat couldn't open it and everything looked signed out although
+// it was all still saved, and a plain restart brought it back. So check first; while locked, don't load the
+// websites or offer to sign in again (either could replace a saved sign-in), and restart once by itself.
+function unlockAtStart() {
+  unlock = checkUnlock()
+  if (unlock !== 'locked' || process.argv.includes(UNLOCK_RETRY)) return
+  setTimeout(() => restartApp(true), 20_000)
+}
+
+function unlockState() {
+  return { locked: unlock === 'locked', retrying: unlock === 'locked' && !process.argv.includes(UNLOCK_RETRY) }
+}
+
+function restartApp(automatic) {
+  const args = process.argv.slice(1).filter((a) => a !== UNLOCK_RETRY)
+  app.relaunch({ args: automatic ? [...args, UNLOCK_RETRY] : args })
+  quitting = true
+  telegram?.disconnect()
+  app.exit(0)
+}
+
 app.whenReady().then(() => {
   settings = loadSettings()
+  unlockAtStart()
   startTelegram()
   const media = new MediaCache(path.join(app.getPath('temp'), 'iv-chat-media'), (chatId, msgId) => telegram.mediaSource(String(chatId).slice(0, 40), msgId))
   protocol.handle(MEDIA_SCHEME, (request) => media.respond(request))

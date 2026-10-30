@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { clock } from './TgMedia'
+import { chosenDeviceId, savedMedia } from '../../devices'
 
 // Recording a voice message, like Telegram Desktop: the mic starts it, then a bar shows the time and the
 // live loudness, with Cancel and Send. The recording (WebM Opus) goes to the main process, which rewraps it
@@ -19,7 +20,12 @@ export default function VoiceRecorder({ onSend, onCancel, onError }) {
     rec.current = state
     ;(async () => {
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } })
+        // The microphone chosen in Settings > Calls and devices, or Windows' default.
+        const media = await savedMedia()
+        const mic = await chosenDeviceId('audioinput', media.mic)
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, ...(mic ? { deviceId: { exact: mic } } : {}) }
+        })
         if (cancelled) return stream.getTracks().forEach((t) => t.stop())
         state.stream = stream
         state.recorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus', audioBitsPerSecond: 32000 })
@@ -44,7 +50,11 @@ export default function VoiceRecorder({ onSend, onCancel, onError }) {
           if (s >= MAX_SECONDS) stop(true)
         }, 60)
       } catch (err) {
-        onError(/Permission|NotAllowed/i.test(String(err)) ? 'IV Chat needs your microphone to record. Allow it in Windows Settings, Privacy, Microphone.' : "Couldn't start recording: " + (err.message || err))
+        onError(
+          /Permission|NotAllowed/i.test(String(err))
+            ? 'IV Chat needs your microphone to record. Check Settings > Calls and devices, and Windows Settings, Privacy, Microphone.'
+            : "Couldn't start recording: " + (err.message || err)
+        )
         onCancel()
       }
     })()

@@ -45,6 +45,12 @@ replies, but nothing is ever sent for you: a message only goes when you press En
     Send now and Delete.
   - Translate a message into your language from its menu.
   - Select several messages to copy, forward or delete them together.
+  - When someone calls you on Telegram, IV Chat shows who's calling and rings. Decline from IV Chat, or
+    answer on your phone or in Telegram Desktop (IV Chat can't take calls itself yet). Missed calls get a
+    notification.
+- **Calls and devices.** Choose your microphone, camera and speaker, with a level meter, a camera preview
+  and a test sound. Voice messages and the websites' own calls use them. Set each service to Ask, Allow
+  or Block for the microphone and camera.
 - **Room to work.** The sidebar collapses to a column of round logo buttons with their unread counts.
 - **Draft reply.** A button above every chat writes a reply with the Codex app or Claude Code already on
   your PC. Add a few words about what you want to say if you like. The draft lands in the reply box for

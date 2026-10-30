@@ -5,6 +5,8 @@ import PanelHost from './components/PanelHost'
 import Updates from './components/Updates'
 import Telegram from './components/Telegram'
 import Settings from './components/Settings'
+import CallBanner from './components/CallBanner'
+import Locked from './components/Locked'
 import { ALL_VIEWS } from './views'
 import chatMark from './assets/chat-mark.png'
 
@@ -21,6 +23,8 @@ export default function App() {
   const [drafts, setDrafts] = useState({})
   const [refreshing, setRefreshing] = useState(false)
   const [refreshTick, setRefreshTick] = useState(0)
+  const [calls, setCalls] = useState([]) // Telegram calls ringing now, newest last
+  const [unlock, setUnlock] = useState(null) // { locked, retrying } when saved sign-ins couldn't be opened
 
   useEffect(() => {
     window.iv.services.list().then(setServices)
@@ -31,14 +35,19 @@ export default function App() {
     window.iv.telegram.dialogs().then(setTgDialogs)
     window.iv.ai.get().then(setAiState)
     window.iv.ai.drafts().then(setDrafts)
+    window.iv.app.unlock().then(setUnlock)
     const offs = [
       window.iv.services.onChange(setServices),
       window.iv.chats.onChange(setChats),
       window.iv.view.onSelect(setView),
       window.iv.app.onUpdate(setUpdate),
+      window.iv.app.onUnlock(setUnlock),
       window.iv.telegram.onState(setTgState),
       window.iv.telegram.onDialogs(setTgDialogs),
       window.iv.telegram.onOpen((id) => setTgOpen(id)),
+      window.iv.telegram.onCall((c) =>
+        setCalls((list) => (c.state === 'ringing' ? [...list.filter((x) => x.id !== c.id), c] : list.filter((x) => x.id !== c.id)))
+      ),
       window.iv.ai.onDraft(({ key, text }) => setDrafts((d) => ({ ...d, [key]: text }))),
       window.iv.ai.onActivity((activity) => setAiState((s) => (s ? { ...s, activity } : s)))
     ]
@@ -95,6 +104,9 @@ export default function App() {
   const totalUnread = services.reduce((sum, s) => sum + (s.enabled ? s.unread : 0), 0) + tgUnread
   const ai = aiState?.ai ?? settings?.ai ?? { enabled: true, mode: 'chosen', allowed: [], excluded: [] }
 
+  // Settings stays usable while the saved sign-ins are locked; every other view shows the locked screen.
+  const locked = Boolean(unlock?.locked) && view !== 'settings'
+
   return (
     <div className={`app${settings?.navCollapsed ? ' is-mini' : ''}`}>
       <header className="titlebar">
@@ -133,11 +145,23 @@ export default function App() {
         onToggle={() => changeSettings({ navCollapsed: !settings?.navCollapsed })}
         onSelect={setView}
       />
+      {calls.length > 0 && (
+        <div className="call-strip">
+          <CallBanner
+            key={calls[calls.length - 1].id}
+            call={calls[calls.length - 1]}
+            media={settings?.media}
+            onOpenChat={openTelegramChat}
+            onGone={(id) => setCalls((list) => list.filter((x) => x.id !== id))}
+          />
+        </div>
+      )}
         <main className="main">
-          {panel && (
+          {locked && <Locked unlock={unlock} onChange={setUnlock} />}
+          {!locked && panel && (
             <PanelHost key={panel.id} service={panel} onEnable={(id) => changeSettings({ services: { [id]: { enabled: true } } })} />
           )}
-          {view === 'updates' && (
+          {!locked && view === 'updates' && (
             <Updates
               services={services}
               chats={chats}
@@ -147,7 +171,7 @@ export default function App() {
               onOpenTelegram={openTelegramChat}
             />
           )}
-          {view === 'telegram' && (
+          {!locked && view === 'telegram' && (
             <Telegram
               state={tgState}
               dialogs={tgDialogs}

@@ -6,6 +6,7 @@ import { Menu, WebContentsView, clipboard, dialog, session, shell } from 'electr
 import { EventEmitter } from 'node:events'
 import path from 'node:path'
 import { SERVICES, PANEL_IDS, READS_CHATS, chromeUserAgent, hostAllowed, parseUnread, popupAllowed } from './services'
+import { MEDIA_DEFAULTS, accessDecision } from './media-settings.js'
 
 // Chromium's code for a navigation that was replaced by another one; not a real failure.
 const ERR_ABORTED = -3
@@ -23,7 +24,9 @@ export class Panels extends EventEmitter {
     this.bounds = { x: 0, y: 0, width: 0, height: 0 }
     this.active = null
     this.configured = new Set()
+    // Answers to "wants to use your microphone and camera" for services set to Ask, for this run only.
     this.mediaGrants = new Map()
+    this.media = MEDIA_DEFAULTS
     this.states = Object.fromEntries(PANEL_IDS.map((id) => [id, { id, enabled: false, state: 'off', unread: 0 }]))
     // Latest chats read from each panel's chat list. Kept in memory only, never written to disk.
     this.readerOn = false
@@ -31,8 +34,24 @@ export class Panels extends EventEmitter {
     this.assistWaiting = new Map()
     this.assistQueue = Promise.resolve()
     this.borrowed = null
+    this.locked = false
     win.on('resize', () => this.layout())
     this.chats = Object.fromEntries(PANEL_IDS.map((id) => [id, { status: 'off', chats: [] }]))
+  }
+
+  // ---------- devices and access ----------
+
+  // Settings > Calls and devices. Switching a service back to Ask forgets this run's answer for it.
+  setMedia(media) {
+    for (const id of PANEL_IDS) {
+      if (media.access[id] === 'ask' && this.media.access[id] !== 'ask') this.mediaGrants.delete(id)
+    }
+    this.media = media
+    for (const view of this.views.values()) view.webContents.send('media:set', this.wantedDevices())
+  }
+
+  wantedDevices() {
+    return { mic: this.media.mic, camera: this.media.camera, speaker: this.media.speaker }
   }
 
   // ---------- latest messages ----------
@@ -72,9 +91,11 @@ export class Panels extends EventEmitter {
 
   // ---------- lifecycle ----------
 
+  // While IV Chat can't unlock its saved sign-ins (index.js unlockAtStart) no website is loaded: a site
+  // that can't read its cookies would show its login page, and signing in there would replace them.
   sync(settings) {
     for (const id of PANEL_IDS) {
-      const want = settings.services[id].enabled
+      const want = settings.services[id].enabled && !this.locked
       if (want && !this.views.has(id)) this.create(id)
       if (!want && this.views.has(id)) this.destroy(id)
     }
@@ -123,15 +144,18 @@ export class Panels extends EventEmitter {
     ses.setUserAgent(chromeUserAgent(ses.getUserAgent()))
 
     // IV Chat raises its own notifications (see index.js), so the sites' own ones are declined.
-    // Microphone and camera are asked about when a site first wants them; everything else is declined.
-    const decide = (permission, details) => {
+    // Microphone and camera follow Settings > Calls and devices: Allow, Block, or ask when a site first wants
+    // them. Choosing a speaker goes with that. Everything else is declined.
+    const media = () => accessDecision(this.media.access[service.id], this.mediaGrants.get(service.id))
+    const decide = (permission) => {
       if (permission === 'clipboard-sanitized-write' || permission === 'fullscreen') return true
-      if (permission === 'media') return this.mediaGrants.get(service.id) ?? null
+      if (permission === 'media') return media()
+      if (permission === 'speaker-selection') return media() === true
       return false
     }
-    ses.setPermissionCheckHandler((_wc, permission, _origin, details) => decide(permission, details) === true)
+    ses.setPermissionCheckHandler((_wc, permission) => decide(permission) === true)
     ses.setPermissionRequestHandler(async (_wc, permission, callback, details) => {
-      const known = decide(permission, details)
+      const known = decide(permission)
       if (known !== null) return callback(known)
       const what = (details.mediaTypes || []).join(' and ') || 'microphone or camera'
       const { response } = await dialog.showMessageBox(this.win, {
@@ -141,7 +165,7 @@ export class Panels extends EventEmitter {
         cancelId: 1,
         title: service.name,
         message: `${service.name} wants to use your ${what}.`,
-        detail: 'This lasts until IV Chat is closed.'
+        detail: 'This lasts until IV Chat is closed. To decide for good, choose Allow or Block in Settings > Calls and devices.'
       })
       this.mediaGrants.set(service.id, response === 0)
       callback(response === 0)
@@ -157,8 +181,9 @@ export class Panels extends EventEmitter {
     })
     wc.on('did-finish-load', () => {
       this.update(id, { state: 'ready', error: null })
-      // A full page load starts the reader fresh, so tell it again whether it may run.
+      // A full page load starts the reader and device choice fresh, so tell them again.
       wc.send('reader:set', this.readerOn)
+      wc.send('media:set', this.wantedDevices())
     })
     wc.on('did-fail-load', (_e, code, description, _url, isMainFrame) => {
       if (!isMainFrame || code === ERR_ABORTED) return
@@ -279,6 +304,8 @@ export class Panels extends EventEmitter {
   // app UI underneath, so the panel steps aside for them. Hidden panels keep their full size: WhatsApp only
   // draws the messages that fit, so a zero-size hidden panel would show the AI a single message.
   layout() {
+    // Pages can still report a load failure or a stopped page while the window is closing.
+    if (this.win.isDestroyed()) return
     const area = this.area()
     const front = this.borrowed ?? this.active
     for (const [id, view] of this.views) {

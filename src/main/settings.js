@@ -4,6 +4,7 @@ import path from 'node:path'
 import { PANEL_IDS } from './services'
 import { AI_DEFAULTS, cleanAi } from './ai-access.js'
 import { PREF_DEFAULTS, cleanPrefs } from './starter.js'
+import { MEDIA_DEFAULTS, cleanMedia } from './media-settings.js'
 
 const file = () => path.join(app.getPath('userData'), 'settings.json')
 
@@ -24,6 +25,8 @@ const defaults = () => ({
   replyPrefs: { ...PREF_DEFAULTS },
   // Which AI the Draft button runs: 'auto' (Codex if installed, else Claude Code), 'codex' or 'claude'.
   draftEngine: 'auto',
+  // Microphone, camera and speaker, ringing for Telegram calls, and per-service access (see media-settings.js).
+  media: cleanMedia(MEDIA_DEFAULTS),
   // The exact text added to Claude Desktop's settings, so Disconnect can remove exactly that.
   connections: { claudeDesktopInserted: null }
 })
@@ -38,6 +41,7 @@ export function loadSettings() {
       services: Object.fromEntries(PANEL_IDS.map((id) => [id, { ...base.services[id], ...saved.services?.[id] }])),
       ai: cleanAi(saved.ai),
       replyPrefs: cleanPrefs(saved.replyPrefs),
+      media: cleanMedia(saved.media),
       connections: { ...base.connections, ...saved.connections }
     }
   } catch {
@@ -60,6 +64,7 @@ export function applyPatch(current, patch) {
   if (patch?.ai?.mode === 'all' || patch?.ai?.mode === 'chosen') next.ai.mode = patch.ai.mode
   if (['auto', 'codex', 'claude'].includes(patch?.draftEngine)) next.draftEngine = patch.draftEngine
   if (patch?.replyPrefs && typeof patch.replyPrefs === 'object') next.replyPrefs = cleanPrefs({ ...next.replyPrefs, ...patch.replyPrefs })
+  if (patch?.media && typeof patch.media === 'object') next.media = cleanMedia(patch.media, next.media)
   return next
 }
 

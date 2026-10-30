@@ -5,8 +5,10 @@
 // 2. Chat list reader (read-only): every few seconds, reads the top of the chat list that's already
 //    on screen (name, last message, time, unread count) for IV Chat's Updates page. It never clicks,
 //    types, scrolls or sends, and only runs while "Show latest messages" is on in Settings.
+// 3. Device choice: the microphone, camera and speaker picked in Settings > Calls and devices (device-choice.js).
 import { contextBridge, ipcRenderer } from 'electron'
 import { flattenDraft, mediaLabel, parsePrePlain } from '../main/whatsapp-parse.js'
+import { installDeviceChoice } from '../main/device-choice.js'
 
 contextBridge.executeInMainWorld({
   func: () => {
@@ -22,6 +24,15 @@ contextBridge.executeInMainWorld({
       return Promise.reject(new DOMException('The request is not allowed.', 'NotAllowedError'))
     }
   }
+})
+
+// ---------- device choice ----------
+
+// A fresh name each page load for the hidden setter that passes new choices into the page.
+const DEVICE_KEY = `__iv_${Math.random().toString(36).slice(2)}`
+contextBridge.executeInMainWorld({ func: installDeviceChoice, args: [DEVICE_KEY, ipcRenderer.sendSync('panel:media')] })
+ipcRenderer.on('media:set', (_e, wanted) => {
+  contextBridge.executeInMainWorld({ func: (key, w) => window[key]?.(w), args: [DEVICE_KEY, wanted] })
 })
 
 // ---------- chat list reader ----------

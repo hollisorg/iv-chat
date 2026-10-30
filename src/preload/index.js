@@ -28,6 +28,8 @@ contextBridge.exposeInMainWorld('iv', {
     onTyping: on('telegram:typing'),
     onStatus: on('telegram:status'),
     onFolders: on('telegram:folders'),
+    onCall: on('telegram:call'),
+    declineCall: (callId) => ipcRenderer.invoke('telegram:declineCall', callId),
     saveKeys: (apiId, apiHash) => ipcRenderer.invoke('telegram:saveKeys', apiId, apiHash),
     signIn: () => ipcRenderer.invoke('telegram:signIn'),
     password: (pw) => ipcRenderer.invoke('telegram:password', pw),
@@ -106,6 +108,10 @@ contextBridge.exposeInMainWorld('iv', {
     checkForUpdate: () => ipcRenderer.invoke('update:check'),
     installUpdate: () => ipcRenderer.invoke('update:install'),
     onUpdate: on('update:changed'),
-    openLicenses: () => ipcRenderer.invoke('about:licenses')
+    openLicenses: () => ipcRenderer.invoke('about:licenses'),
+    unlock: () => ipcRenderer.invoke('app:unlock'),
+    onUnlock: on('app:unlock'),
+    restart: () => ipcRenderer.invoke('app:restart'),
+    startOver: () => ipcRenderer.invoke('app:startOver')
   }
 })

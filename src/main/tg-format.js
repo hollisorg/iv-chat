@@ -121,7 +121,7 @@ export function serviceText(msg) {
     MessageActionChatCreate: `created the group "${a.title || ''}"`,
     MessageActionChannelCreate: 'created the channel',
     MessageActionPinMessage: 'pinned a message',
-    MessageActionPhoneCall: 'call',
+    MessageActionPhoneCall: callText(msg),
     MessageActionHistoryClear: 'cleared the history',
     MessageActionContactSignUp: 'joined Telegram',
     MessageActionScreenshotTaken: 'took a screenshot'
@@ -386,3 +386,36 @@ export function markupInfo(msg) {
   )
   return { type: m.className === 'ReplyInlineMarkup' ? 'inline' : 'keyboard', rows, resize: Boolean(m.resize), single: Boolean(m.singleUse), placeholder: m.placeholder || '' }
 }
+
+// ---------- calls ----------
+
+const clock = (seconds) => `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`
+
+// The line a call leaves in the chat, as Telegram words it: "Missed call", "Declined call",
+// "Outgoing video call · 2:05".
+export function callText(msg) {
+  const a = msg.action || {}
+  const kind = a.video ? 'video call' : 'call'
+  const reason = a.reason?.className
+  if (reason === 'PhoneCallDiscardReasonMissed') return msg.out ? `Cancelled ${kind}` : `Missed ${kind}`
+  if (reason === 'PhoneCallDiscardReasonBusy') return `Declined ${kind}`
+  const word = msg.out ? 'Outgoing' : 'Incoming'
+  return a.duration ? `${word} ${kind} · ${clock(a.duration)}` : `${word} ${kind}`
+}
+
+// What a call update means for this device: someone calling you ("ringing"), the call gone from here
+// ("ended": hung up, missed, declined, or answered on another device), or nothing to show.
+export function callEvent(call, myId) {
+  if (!call) return null
+  const id = String(call.id)
+  if (call.className === 'PhoneCallRequested') {
+    const toMe = String(call.participantId) === String(myId) && String(call.adminId) !== String(myId)
+    return toMe ? { state: 'ringing', id, accessHash: String(call.accessHash), callerId: String(call.adminId), video: Boolean(call.video) } : null
+  }
+  if (call.className === 'PhoneCallWaiting') return null
+  return { state: 'ended', id }
+}
+
+// A missed call to you, from the line it leaves in the chat.
+export const isMissedCall = (msg) =>
+  msg?.action?.className === 'MessageActionPhoneCall' && !msg.out && msg.action.reason?.className === 'PhoneCallDiscardReasonMissed'

@@ -1060,7 +1060,7 @@ function Conversation({ dialog, dialogs, ai, draft, onToggleAi, refreshTick }) {
             </div>
           ) : r.type === 'service' ? (
             <div key={r.key} className="service-line">
-              {r.m.from && r.m.from !== 'You' ? `${r.m.from} ` : r.m.from === 'You' ? 'You ' : ''}
+              {r.m.serviceAlone ? '' : r.m.from && r.m.from !== 'You' ? `${r.m.from} ` : r.m.from === 'You' ? 'You ' : ''}
               {r.m.service}
             </div>
           ) : (

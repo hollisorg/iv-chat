@@ -9,9 +9,9 @@ import { Api, TelegramClient, utils } from 'telegram'
 import { StringSession } from 'telegram/sessions/index.js'
 import { NewMessage, Raw } from 'telegram/events/index.js'
 import { LogLevel } from 'telegram/extensions/Logger.js'
-import { deleteSecret, readSecret, writeSecret } from './secure-store'
+import { deleteSecret, isLocked, readSecret, writeSecret } from './secure-store'
 import { encodeWaveform } from './waveform.js'
-import { actionText, dialogName, entityList, folderRules, inFolder, markupInfo, pollInfo, linkPreview, mediaInfo, messageText, personName, reactionList, senderName, serviceText, statusText } from './tg-format.js'
+import { actionText, callEvent, isMissedCall, dialogName, entityList, folderRules, inFolder, markupInfo, pollInfo, linkPreview, mediaInfo, messageText, personName, reactionList, senderName, serviceText, statusText } from './tg-format.js'
 
 const KEYS = 'telegram-app'
 const SESSION = 'telegram-session'
@@ -27,7 +27,7 @@ export class TelegramService extends EventEmitter {
     super()
     this.client = null
     this.me = null
-    this.status = 'starting' // needs-keys | signed-out | qr | password | connecting | ready | error
+    this.status = 'starting' // locked | needs-keys | signed-out | qr | password | connecting | ready | error
     this.qr = null
     this.passwordHint = ''
     this.error = null
@@ -38,6 +38,7 @@ export class TelegramService extends EventEmitter {
     this.avatars = new Map() // chat id -> Promise of a profile picture data URL (or null)
     this.found = new Map() // chat id -> entity, from New chat searches
     this.folders = []
+    this.calls = new Map() // call id -> { id, accessHash } for calls ringing on this device
   }
 
   // Only the fields the UI needs; never the session or keys.
@@ -71,6 +72,9 @@ export class TelegramService extends EventEmitter {
   }
 
   async start() {
+    // Saved keys and session that can't be unlocked right now: don't offer to set up or sign in again,
+    // which would replace them. Restarting IV Chat usually unlocks them (see secure-store.js).
+    if (isLocked()) return this.set({ status: 'locked', error: null })
     const keys = this.appKeys()
     if (!keys) return this.set({ status: 'needs-keys', error: null })
     const session = readSecret(SESSION)?.session || ''
@@ -172,7 +176,10 @@ export class TelegramService extends EventEmitter {
           Api.UpdateDialogFilter,
           Api.UpdateDialogFilters,
           Api.UpdateDialogFilterOrder,
-          Api.UpdateMessagePoll
+          Api.UpdateMessagePoll,
+          Api.UpdatePhoneCall,
+          // Only for the line a call leaves in the chat; ordinary messages come through NewMessage above.
+          Api.UpdateNewMessage
         ]
       })
     )
@@ -344,6 +351,8 @@ export class TelegramService extends EventEmitter {
       scheduled: Boolean(m.fromScheduled && m.date * 1000 > Date.now()),
       silent: Boolean(m.silent),
       service: m.action ? serviceText(m) : null,
+      // Call lines read on their own ("Missed call"), without the sender's name in front.
+      serviceAlone: m.action?.className === 'MessageActionPhoneCall',
       reply: m.replyTo?.replyToMsgId
         ? reply
           ? { id: reply.id, from: senderName(reply, this.me) || personName(reply.sender), text: messageText(reply) }
@@ -575,6 +584,15 @@ export class TelegramService extends EventEmitter {
         }
         return this.emit('typing', { chatId, text: text ? (name ? `${name} is ${text}` : text) : null, until: text ? Date.now() + TYPING_MS : 0 })
       }
+      case 'UpdatePhoneCall':
+        return this.onCall(u.phoneCall)
+      case 'UpdateNewMessage': {
+        const m = u.message
+        if (m?.className !== 'MessageService' || m.action?.className !== 'MessageActionPhoneCall') return
+        const id = peerId(utils.getPeerId(m.peerId))
+        if (isMissedCall(m)) this.emit('missed-call', { chat_id: id, name: this.dialogs.get(id)?.name || '' })
+        return this.emit('message', id)
+      }
       case 'UpdateDialogPinned':
       case 'UpdatePinnedDialogs':
       case 'UpdateFolderPeers':
@@ -587,6 +605,47 @@ export class TelegramService extends EventEmitter {
         return this.softRefresh()
       default:
     }
+  }
+
+  // ---------- calls ----------
+  // IV Chat shows that someone is calling and can decline. It never answers or starts a call.
+
+  async onCall(call) {
+    const ev = callEvent(call, this.me?.id)
+    if (!ev) return
+    if (ev.state === 'ended') {
+      if (this.calls.delete(ev.id)) this.emit('call', { state: 'ended', id: ev.id })
+      return
+    }
+    if (this.calls.has(ev.id)) return
+    this.calls.set(ev.id, { id: ev.id, accessHash: ev.accessHash })
+    let name = this.dialogs.get(ev.callerId)?.name || ''
+    if (!name) {
+      try {
+        name = personName(await this.client.getEntity(bigInt(ev.callerId)))
+      } catch {
+        /* shown as "Someone" */
+      }
+    }
+    if (!this.calls.has(ev.id)) return // it ended while we looked the caller up
+    this.emit('call', { state: 'ringing', id: ev.id, chatId: ev.callerId, name, video: ev.video })
+    // Tells Telegram the call reached this device, so the caller sees it ringing.
+    this.client.invoke(new Api.phone.ReceivedCall({ peer: this.callPeer(ev.id) })).catch(() => {})
+  }
+
+  callPeer(id) {
+    const c = this.calls.get(String(id))
+    if (!c) throw new Error('That call has already ended')
+    return new Api.InputPhoneCall({ id: bigInt(c.id), accessHash: bigInt(c.accessHash) })
+  }
+
+  // Declines a ringing call for every device, as Telegram's own Decline does (the chat shows "Declined call").
+  async declineCall(id) {
+    const peer = this.callPeer(id)
+    await this.client.invoke(
+      new Api.phone.DiscardCall({ peer, duration: 0, reason: new Api.PhoneCallDiscardReasonBusy(), connectionId: bigInt(0) })
+    )
+    if (this.calls.delete(String(id))) this.emit('call', { state: 'ended', id: String(id) })
   }
 
   async message(id, msgId) {

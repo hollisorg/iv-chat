@@ -98,7 +98,7 @@ function LatestMessages({ services, chats, telegram, enabled, onSelect, onOpenTe
   )
 }
 
-const TG_STATUS = { ready: 'Connected', 'needs-keys': 'Not set up', 'signed-out': 'Not connected', qr: 'Connecting', password: 'Connecting', connecting: 'Connecting', starting: 'Starting', error: "Can't reach" }
+const TG_STATUS = { locked: 'Locked', ready: 'Connected', 'needs-keys': 'Not set up', 'signed-out': 'Not connected', qr: 'Connecting', password: 'Connecting', connecting: 'Connecting', starting: 'Starting', error: "Can't reach" }
 
 export default function Updates({ services, chats, telegram, latestEnabled, onSelect, onOpenTelegram }) {
   const tg = telegram.state

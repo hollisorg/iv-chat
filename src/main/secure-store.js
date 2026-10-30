@@ -1,26 +1,20 @@
 // Small encrypted files in the profile folder, protected by Windows (DPAPI) through Electron's safeStorage.
-// Used for the Telegram session and app keys. Nothing here is ever logged.
+// Used for the Telegram session and app keys. Nothing here is ever logged. The logic, including the startup
+// check that the Windows key unlocks, is in unlock-store.js.
 import { app, safeStorage } from 'electron'
-import fs from 'node:fs'
-import path from 'node:path'
+import { createStore } from './unlock-store'
 
-const file = (name) => path.join(app.getPath('userData'), `${name}.bin`)
+let store = null
+const get = () =>
+  (store ??= createStore(app.getPath('userData'), {
+    available: () => safeStorage.isEncryptionAvailable(),
+    encrypt: (text) => safeStorage.encryptString(text),
+    decrypt: (buf) => safeStorage.decryptString(buf)
+  }))
 
-export function readSecret(name) {
-  try {
-    const buf = fs.readFileSync(file(name))
-    return JSON.parse(safeStorage.decryptString(buf))
-  } catch {
-    return null
-  }
-}
-
-export function writeSecret(name, value) {
-  if (!safeStorage.isEncryptionAvailable()) throw new Error('Windows encryption is not available, so IV Chat cannot store this safely')
-  fs.mkdirSync(path.dirname(file(name)), { recursive: true })
-  fs.writeFileSync(file(name), safeStorage.encryptString(JSON.stringify(value)))
-}
-
-export function deleteSecret(name) {
-  fs.rmSync(file(name), { force: true })
-}
+export const checkUnlock = () => get().checkUnlock()
+export const isLocked = () => get().isLocked()
+export const forgetLocked = () => get().forget()
+export const readSecret = (name) => get().readSecret(name)
+export const writeSecret = (name, value) => get().writeSecret(name, value)
+export const deleteSecret = (name) => get().deleteSecret(name)

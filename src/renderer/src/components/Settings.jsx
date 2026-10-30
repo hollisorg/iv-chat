@@ -1,5 +1,6 @@
 import { NAMES } from '../views'
 import AiSettings from './AiSettings'
+import DeviceSettings from './DeviceSettings'
 import Hero from './Hero'
 
 function Toggle({ label, hint, checked, onChange }) {
@@ -40,7 +41,7 @@ export default function Settings({ settings, services, update, onChange, telegra
   if (!settings) return null
   return (
     <section className="page" aria-label="Settings">
-      <Hero title="Settings" kicker="Services · your AI · the app" />
+      <Hero title="Settings" kicker="Services · calls · your AI · the app" />
 
       <h2 className="section-title">Services</h2>
       <ul className="rows">
@@ -84,6 +85,8 @@ export default function Settings({ settings, services, update, onChange, telegra
           </li>
         ))}
       </ul>
+
+      {settings.media && <DeviceSettings media={settings.media} onChange={onChange} />}
 
       <AiSettings
         aiState={aiState}
