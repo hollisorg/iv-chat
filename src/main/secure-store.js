@@ -15,6 +15,7 @@ const get = () =>
 export const checkUnlock = () => get().checkUnlock()
 export const isLocked = () => get().isLocked()
 export const forgetLocked = () => get().forget()
+export const holdStore = () => get().hold()
 export const readSecret = (name) => get().readSecret(name)
 export const writeSecret = (name, value) => get().writeSecret(name, value)
 export const deleteSecret = (name) => get().deleteSecret(name)

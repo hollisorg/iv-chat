@@ -105,7 +105,8 @@ export default function App() {
   const ai = aiState?.ai ?? settings?.ai ?? { enabled: true, mode: 'chosen', allowed: [], excluded: [] }
 
   // Settings stays usable while the saved sign-ins are locked; every other view shows the locked screen.
-  const locked = Boolean(unlock?.locked) && view !== 'settings'
+  // Opened inside another app's package, Settings would only change that app's copy, so it's locked too.
+  const locked = Boolean(unlock?.locked) && (Boolean(unlock?.borrowedBy) || view !== 'settings')
 
   return (
     <div className={`app${settings?.navCollapsed ? ' is-mini' : ''}`}>
@@ -183,7 +184,7 @@ export default function App() {
               refreshTick={refreshTick}
             />
           )}
-          {view === 'settings' && (
+          {!locked && view === 'settings' && (
             <Settings
               settings={settings}
               services={services}

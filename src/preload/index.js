@@ -112,6 +112,7 @@ contextBridge.exposeInMainWorld('iv', {
     unlock: () => ipcRenderer.invoke('app:unlock'),
     onUnlock: on('app:unlock'),
     restart: () => ipcRenderer.invoke('app:restart'),
+    quit: () => ipcRenderer.invoke('app:quit'),
     startOver: () => ipcRenderer.invoke('app:startOver')
   }
 })

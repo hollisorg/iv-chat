@@ -48,6 +48,12 @@ export function createStore(dir, crypto) {
 
     isLocked: () => locked,
 
+    // Started inside another app's package (see package-guard.js): this folder isn't the person's real one,
+    // so treat it as locked and write nothing to it.
+    hold() {
+      locked = true
+    },
+
     readSecret(name) {
       const r = open(name)
       return r.state === 'ok' ? r.value : null
@@ -62,6 +68,7 @@ export function createStore(dir, crypto) {
     },
 
     deleteSecret(name) {
+      if (locked) return
       fs.rmSync(file(name), { force: true })
     },
 

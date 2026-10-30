@@ -7,7 +7,8 @@ import { SERVICES, PANEL_IDS, sanitizeChats, totalUnread } from './services'
 import { applyPatch, loadSettings, saveSettings } from './settings'
 import { initUpdater, updateState } from './updater'
 import { TelegramService } from './telegram'
-import { checkUnlock, forgetLocked } from './secure-store'
+import { checkUnlock, forgetLocked, holdStore } from './secure-store'
+import { borrowedFolder } from './package-guard.js'
 import { MediaCache, SCHEME as MEDIA_SCHEME, mediaUrl } from './tg-media.js'
 import { webmToOgg } from './ogg-opus.js'
 import { countsAsUnread } from './tg-format.js'
@@ -49,6 +50,7 @@ let quitting = false
 let activeView = 'updates'
 let telegram = null
 let unlock = 'ok' // 'locked' while the saved sign-ins can't be opened; see unlockAtStart()
+let borrowed = null // { app } when started inside another app's package; see unlockAtStart()
 const activity = [] // the AI's recent tool calls, without message text; memory only
 const aiDrafts = {} // chat key -> latest AI draft, shown in the Telegram reply box
 const pickedFiles = new Map() // token -> file the person picked to send in Telegram
@@ -254,7 +256,8 @@ function updateSettings(patch) {
   const before = settings
   settings = applyPatch(settings, patch)
   saveSettings(settings)
-  if (before.launchAtLogin !== settings.launchAtLogin && app.isPackaged) {
+  // Inside another app's package the startup entry would only be written to that app's private registry.
+  if (before.launchAtLogin !== settings.launchAtLogin && app.isPackaged && !borrowed) {
     app.setLoginItemSettings({ openAtLogin: settings.launchAtLogin, args: ['--hidden'] })
   }
   panels?.sync(settings)
@@ -284,12 +287,20 @@ function registerIpc() {
   ipcMain.handle('app:unlock', () => unlockState())
   ipcMain.handle('app:restart', (e) => {
     fromWindow(e)
+    // Restarting from inside another app's package would start inside it again.
+    if (borrowed) throw new Error('Close IV Chat and open it from the Start menu instead.')
     restartApp(false)
+  })
+  ipcMain.handle('app:quit', (e) => {
+    fromWindow(e)
+    quitting = true
+    app.quit()
   })
   // The person chose to sign in again rather than restart: removes only the saved sign-ins that can't be
   // opened (website panels lose theirs too, since their cookies use the same key).
   ipcMain.handle('app:startOver', (e) => {
     fromWindow(e)
+    if (borrowed) throw new Error('Close IV Chat and open it from the Start menu instead.')
     unlock = forgetLocked()
     if (unlock !== 'locked') {
       panels.locked = false
@@ -793,13 +804,25 @@ app.on('second-instance', showWindow)
 // it was all still saved, and a plain restart brought it back. So check first; while locked, don't load the
 // websites or offer to sign in again (either could replace a saved sign-in), and restart once by itself.
 function unlockAtStart() {
+  // Started inside another app's package (package-guard.js): this isn't the person's real IV Chat folder, so
+  // load nothing and write nothing, and say how to open IV Chat properly. No restart: it would land there again.
+  borrowed = borrowedFolder({ userData: app.getPath('userData'), appData: app.getPath('appData'), localAppData: process.env.LOCALAPPDATA })
+  if (borrowed) {
+    holdStore()
+    unlock = 'locked'
+    return
+  }
   unlock = checkUnlock()
   if (unlock !== 'locked' || process.argv.includes(UNLOCK_RETRY)) return
   setTimeout(() => restartApp(true), 20_000)
 }
 
 function unlockState() {
-  return { locked: unlock === 'locked', retrying: unlock === 'locked' && !process.argv.includes(UNLOCK_RETRY) }
+  return {
+    locked: unlock === 'locked',
+    retrying: unlock === 'locked' && !borrowed && !process.argv.includes(UNLOCK_RETRY),
+    borrowedBy: borrowed?.app ?? null
+  }
 }
 
 function restartApp(automatic) {
@@ -820,6 +843,8 @@ app.whenReady().then(() => {
   createWindow()
   createTray()
   refreshUnread()
+  // Borrowed folder: no AI connection and no self-update (an update would reopen IV Chat in the same place).
+  if (borrowed) return
   startAi()
   updater = initUpdater((state) => send('update:changed', state))
 })

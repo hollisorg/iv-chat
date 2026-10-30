@@ -21,6 +21,26 @@ export default function Locked({ unlock, onChange }) {
     setBusy(false)
   }
 
+  // Started inside another app's package (main/package-guard.js): the sign-ins are fine, just out of sight here.
+  if (unlock.borrowedBy) {
+    return (
+      <section className="page" aria-label="Opened inside another app">
+        <Hero title="Opened inside" accent={`${unlock.borrowedBy}.`} kicker="IV Chat · this computer" />
+        <p className="lead">
+          IV Chat was started from inside {unlock.borrowedBy}, so Windows gave it {unlock.borrowedBy}'s private copy of IV
+          Chat's folder instead of yours. Your sign-ins are safe; they just can't be seen from here.
+        </p>
+        <p className="dim">Close this window, then open IV Chat from the Start menu or the taskbar.</p>
+        <div className="row-actions">
+          <button type="button" className="btn" disabled={busy} onClick={() => run(() => window.iv.app.quit())}>
+            Close IV Chat
+          </button>
+        </div>
+        {error && <p className="error">{error}</p>}
+      </section>
+    )
+  }
+
   return (
     <section className="page" aria-label="Sign-ins locked">
       <Hero title="Sign-ins" accent="locked." kicker="IV Chat · this computer" />
