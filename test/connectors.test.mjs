@@ -3,8 +3,8 @@ import assert from 'node:assert/strict'
 import { claudeDesktopConnect, claudeDesktopDisconnect, codexConnect, codexDisconnect } from '../src/main/connectors.js'
 
 const launch = {
-  command: 'C:\\Users\\Matt\\iv-chat\\node_modules\\electron\\dist\\electron.exe',
-  args: ['C:\\Users\\Matt\\iv-chat\\out\\main\\bridge.js', '--profile', 'C:\\Users\\Matt\\AppData\\Roaming\\IV Chat']
+  command: 'C:\\Users\\you\\iv-chat\\node_modules\\electron\\dist\\electron.exe',
+  args: ['C:\\Users\\you\\iv-chat\\out\\main\\bridge.js', '--profile', 'C:\\Users\\you\\AppData\\Roaming\\IV Chat']
 }
 
 const CODEX = `model = "gpt-5"\n\n[mcp_servers.other]\ncommand = "npx"\nargs = ["-y", "thing"]\n`

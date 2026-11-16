@@ -74,7 +74,7 @@ export default function AiGuide({ prefs, onChange }) {
           <input
             value={signOff}
             maxLength={60}
-            placeholder="Optional, e.g. Matt"
+            placeholder="Optional, e.g. Alex"
             onChange={(e) => setSignOff(e.target.value)}
             onBlur={() => onChange({ signOff })}
           />

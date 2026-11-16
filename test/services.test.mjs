@@ -135,10 +135,10 @@ test('WhatsApp helpers: message labels, one-paragraph drafts, media names', () =
 import { cleanPrefs, starterMessage } from '../src/main/starter.js'
 
 test('starter message carries the reply preferences and the no-send rule', () => {
-  const msg = starterMessage('codex', { tone: 'professional', length: 'match', signOff: 'Matt', notes: 'No emojis with clients' })
+  const msg = starterMessage('codex', { tone: 'professional', length: 'match', signOff: 'Alex', notes: 'No emojis with clients' })
   assert.match(msg, /clear and professional/)
   assert.match(msg, /Match the length/)
-  assert.match(msg, /Sign off as "Matt"/)
+  assert.match(msg, /Sign off as "Alex"/)
   assert.match(msg, /No emojis with clients/)
   assert.match(msg, /Never say a message was sent/)
   assert.match(msg, /get_updates/)

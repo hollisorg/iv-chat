@@ -9,7 +9,7 @@ const messages = [
 ]
 
 test('the draft request carries the chat, the preferences and the safety rule', () => {
-  const p = buildDraftPrompt({ service: 'whatsapp', chatName: 'Sam', messages, prefs: { tone: 'professional', length: 'short', signOff: 'Matt' }, hint: 'say I am running late' })
+  const p = buildDraftPrompt({ service: 'whatsapp', chatName: 'Sam', messages, prefs: { tone: 'professional', length: 'short', signOff: 'Alex' }, hint: 'say I am running late' })
   assert.match(p, /WhatsApp chat with "Sam"/)
   assert.match(p, /Me \(6:41 PM\): yes!/)
   assert.match(p, /clear and professional/)
