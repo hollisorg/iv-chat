@@ -5,19 +5,30 @@
 // iv-newsletter function's app path (no Origin header, X-IV-App names the app); Kit then emails them a confirm link
 // (double opt-in). This file keeps no address: only when they joined and whether the first-run card was closed.
 // No key or secret lives in the app. Test copies set IV_NEWSLETTER_URL to a local stand-in so nothing reaches Kit.
+//
+// Existing data is never touched (Matthew, 2026-11-19: people's saved data in the apps needs a safeguard). This file
+// only ever reads and writes its own `newsletter.json`: fileStore refuses any other file name, writes through a
+// temporary file and a rename so a crash can't leave a half-written file, never deletes anything, and a failed write
+// never breaks the app. newsletter-main.test.mjs proves every other file in the folder stays byte-for-byte the same.
 
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
-import { dirname } from 'node:path'
+import { readFileSync, writeFileSync, mkdirSync, renameSync } from 'node:fs'
+import { basename, dirname } from 'node:path'
 
 export const NEWSLETTER_URL = 'https://utajiwjbzrpwjtbcsnly.supabase.co/functions/v1/iv-newsletter'
 export const NEWSLETTER_PAGE = 'https://infinitevariance.ai/newsletter'
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/
 
-// A tiny JSON file store. Apps with their own settings store can pass {get, set} instead.
+// A tiny JSON file store for newsletter.json and nothing else.
 export function fileStore(path) {
+  if (basename(path) !== 'newsletter.json') throw new Error('The newsletter store only writes newsletter.json')
   return {
     get() { try { return JSON.parse(readFileSync(path, 'utf8')) || {} } catch { return {} } },
-    set(value) { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, JSON.stringify(value, null, 2)) }
+    set(value) {
+      mkdirSync(dirname(path), { recursive: true })
+      const tmp = path + '.tmp'
+      writeFileSync(tmp, JSON.stringify(value, null, 2))
+      renameSync(tmp, path)
+    }
   }
 }
 
@@ -25,7 +36,8 @@ export function createNewsletter({ app, version, store, fetch: call = globalThis
   const endpoint = url || process.env.IV_NEWSLETTER_URL || NEWSLETTER_URL
   let busy = false
   const read = () => { const s = store.get() || {}; return { joinedAt: s.joinedAt || null, cardClosedAt: s.cardClosedAt || null } }
-  const write = (patch) => store.set({ ...read(), ...patch })
+  // A failed save (disk full, locked folder) must never break the app or the join; worst case the box forgets.
+  const write = (patch) => { try { store.set({ ...read(), ...patch }) } catch { /* keep going */ } }
 
   return {
     status: () => ({ ...read(), page: NEWSLETTER_PAGE }),

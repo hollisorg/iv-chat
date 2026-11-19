@@ -2,7 +2,7 @@
 // sender; only the import line changes. Run: node --test <this file>
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createNewsletter, fileStore, registerNewsletter, NEWSLETTER_URL, NEWSLETTER_PAGE } from '../src/main/newsletter.js'
@@ -111,4 +111,41 @@ test('Electron wiring: four channels, the website opens in the browser', async (
   await handlers['newsletter:open-page']()
   assert.deepEqual(opened, [NEWSLETTER_PAGE])
   assert.equal((await handlers['newsletter:join']({}, { email: 'ada@example.com' })).ok, true)
+})
+
+// Safeguard (Matthew, 2026-11-19): people's existing data in the apps must never be touched.
+const snapshot = (dir) => {
+  const out = {}
+  const walk = (d) => { for (const f of readdirSync(d)) { const p = join(d, f); if (statSync(p).isDirectory()) walk(p); else out[p.slice(dir.length)] = readFileSync(p).toString('base64') } }
+  walk(dir)
+  return out
+}
+
+test('existing data: every other file in the folder stays byte-for-byte the same', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ivnl-data-'))
+  try {
+    writeFileSync(join(dir, 'settings.json'), JSON.stringify({ signedIn: true, theme: 'dark' }))
+    writeFileSync(join(dir, 'Cookies'), Buffer.from([0, 1, 2, 3, 255]))
+    mkdirSync(join(dir, 'projects', 'p1'), { recursive: true })
+    writeFileSync(join(dir, 'projects', 'p1', 'project.json'), '{"name":"My film"}')
+    const before = snapshot(dir)
+    const n = make(fakeFetch(200, { ok: true }), fileStore(join(dir, 'newsletter.json')))
+    n.status(); await n.join({ email: 'ada@example.com' }); n.closeCard(); n.status()
+    await make({ call: async () => { throw new Error('offline') } }, fileStore(join(dir, 'newsletter.json'))).join({ email: 'ada@example.com' })
+    const after = snapshot(dir)
+    const added = Object.keys(after).filter((k) => !(k in before))
+    assert.deepEqual(added.map((k) => k.replace(/^[\\/]+/, '')), ['newsletter.json'])
+    for (const k of Object.keys(before)) assert.equal(after[k], before[k], k)
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('existing data: the store refuses to write any file but newsletter.json', () => {
+  for (const name of ['settings.json', 'Cookies', 'newsletter.json.bak', 'data/../settings.json']) assert.throws(() => fileStore(join(tmpdir(), name)), /only writes newsletter.json/)
+})
+
+test('a failed save never breaks the join', async () => {
+  const broken = { get: () => ({}), set: () => { throw new Error('disk full') } }
+  const r = await make(fakeFetch(200, { ok: true }), broken).join({ email: 'ada@example.com' })
+  assert.equal(r.ok, true)
+  assert.doesNotThrow(() => make(fakeFetch(200, {}), broken).closeCard())
 })
