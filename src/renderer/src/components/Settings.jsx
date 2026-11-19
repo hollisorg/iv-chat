@@ -2,6 +2,7 @@ import { NAMES } from '../views'
 import AiSettings from './AiSettings'
 import DeviceSettings from './DeviceSettings'
 import Hero from './Hero'
+import NewsletterBox from './NewsletterBox'
 
 function Toggle({ label, hint, checked, onChange }) {
   return (
@@ -133,6 +134,9 @@ export default function Settings({ settings, services, update, onChange, telegra
           />
         </li>
       </ul>
+
+      <h2 className="section-title">The IV Newsletter</h2>
+      <NewsletterBox api={window.iv.newsletter} title={false} />
 
       <h2 className="section-title">About</h2>
       <p className="dim">

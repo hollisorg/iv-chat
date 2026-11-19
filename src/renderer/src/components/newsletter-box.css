@@ -1,0 +1,79 @@
+/* The IV Newsletter box, shared by every IV app (source of truth: IVAI docs/newsletter/apps/newsletter-box.css).
+   It inherits the app's font and text colour. Each app may set these on a parent to match its own look:
+   --ivnl-accent (button), --ivnl-accent-text, --ivnl-line (borders), --ivnl-field (input background),
+   --ivnl-muted (small print), --ivnl-error, --ivnl-panel (card background). */
+.ivnl {
+  /* Defaults follow the app's text colour, so the box suits light and dark apps alike. */
+  --_accent: var(--ivnl-accent, #f44859);
+  --_accent-text: var(--ivnl-accent-text, #140b0e);
+  --_line: var(--ivnl-line, color-mix(in srgb, currentColor 22%, transparent));
+  --_field: var(--ivnl-field, color-mix(in srgb, currentColor 6%, transparent));
+  --_muted: var(--ivnl-muted, color-mix(in srgb, currentColor 68%, transparent));
+  --_error: var(--ivnl-error, #e5484d);
+  font: inherit;
+  color: inherit;
+  max-width: 560px;
+}
+.ivnl-card {
+  padding: 18px 20px;
+  border: 1px solid var(--_line);
+  border-radius: 14px;
+  background: var(--ivnl-panel, color-mix(in srgb, currentColor 4%, transparent));
+}
+.ivnl-title { margin: 0 0 4px; font-size: 1.05em; font-weight: 700; letter-spacing: 0.01em; }
+.ivnl-lead { margin: 0 0 12px; line-height: 1.45; }
+.ivnl-form { margin: 0; }
+.ivnl-label { display: block; margin: 0 0 6px; font-size: 0.86em; color: var(--_muted); }
+.ivnl-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.ivnl-input {
+  flex: 1 1 200px;
+  min-width: 0;
+  min-height: 44px;
+  box-sizing: border-box;
+  padding: 0 12px;
+  font: inherit;
+  color: inherit;
+  background: var(--_field);
+  border: 1px solid var(--_line);
+  border-radius: 10px;
+}
+.ivnl-input:focus-visible { outline: 2px solid var(--_accent); outline-offset: 1px; }
+.ivnl-input[aria-invalid='true'] { border-color: var(--_error); }
+.ivnl-join, .ivnl-secondary {
+  min-height: 44px;
+  padding: 0 18px;
+  font: inherit;
+  font-weight: 700;
+  border-radius: 10px;
+  cursor: pointer;
+}
+.ivnl-join { flex: 0 0 auto; color: var(--_accent-text); background: var(--_accent); border: 1px solid var(--_accent); }
+.ivnl-join:disabled { opacity: 0.6; cursor: default; }
+.ivnl-secondary { color: inherit; background: transparent; border: 1px solid var(--_line, var(--ivnl-line, color-mix(in srgb, currentColor 30%, transparent))); }
+.ivnl-join:focus-visible, .ivnl-secondary:focus-visible, .ivnl-link:focus-visible { outline: 2px solid var(--_accent); outline-offset: 2px; }
+.ivnl-small { margin: 10px 0 0; font-size: 0.82em; line-height: 1.45; color: var(--_muted); }
+.ivnl-error { margin: 8px 0 0; font-size: 0.9em; color: var(--_error); }
+.ivnl-done { margin: 0; line-height: 1.45; }
+.ivnl-link {
+  padding: 0;
+  font: inherit;
+  color: var(--_accent);
+  background: none;
+  border: 0;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.ivnl-card-actions { display: flex; justify-content: flex-end; margin-top: 12px; }
+.ivnl-dialog .ivnl-secondary:focus-visible, .newsletter-page .ivnl-secondary:focus-visible { outline: 2px solid var(--ivnl-accent, #f44859); outline-offset: 2px; }
+/* NewsletterDialog (apps without a settings page) and the standalone window (IV Keys). */
+.ivnl-dialog {
+  width: min(520px, calc(100vw - 32px));
+  box-sizing: border-box;
+  padding: 22px 22px 16px;
+  color: var(--ivnl-text, #f1ede5);
+  background: var(--ivnl-panel-solid, #19131a);
+  border: 1px solid var(--ivnl-line, rgba(255, 255, 255, 0.16));
+  border-radius: 16px;
+}
+.ivnl-dialog::backdrop { background: rgba(0, 0, 0, 0.6); }

@@ -1,3 +1,4 @@
+import { createNewsletter, fileStore, registerNewsletter } from './newsletter'
 import { app, BrowserWindow, Menu, Notification, Tray, clipboard, dialog, ipcMain, nativeImage, protocol, shell } from 'electron'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
@@ -270,6 +271,9 @@ function updateSettings(patch) {
 // ---------- IPC ----------
 
 function registerIpc() {
+  // The IV Newsletter (src/main/newsletter.js, shared by every IV app): sends only an address typed and joined,
+  // keeps only the join date. A copy with its own data folder (IV_CHAT_PROFILE) is a test copy: it only sends to IV_NEWSLETTER_URL.
+  registerNewsletter(ipcMain, shell, createNewsletter({ app: 'iv-chat', version: app.getVersion(), store: fileStore(path.join(app.getPath('userData'), 'newsletter.json')), url: process.env.IV_CHAT_PROFILE ? process.env.IV_NEWSLETTER_URL || 'http://127.0.0.1:9/iv-newsletter' : undefined }))
   ipcMain.handle('services:list', () => panels.snapshot())
   ipcMain.handle('chats:get', () => panels.chatsSnapshot())
   // Sent by the read-only reader inside a panel; panels.chatsFrom checks it came from a panel's own page.
