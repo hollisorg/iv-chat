@@ -3321,3 +3321,107 @@ img.avatar {
 .locked-confirm p {
   margin: 0 0 12px;
 }
+
+/* Saying what a Draft should say (Dictate.jsx): the mic beside the Draft buttons */
+.mic-say {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 36px;
+  border-color: var(--line-strong);
+  color: var(--paper);
+}
+
+.mic-say.is-live {
+  border-color: var(--red);
+  background: rgba(244, 72, 89, 0.2);
+  animation: mic-say-pulse 1.4s ease-in-out infinite;
+}
+
+.mic-say.is-busy {
+  opacity: 0.75;
+}
+
+.mic-say-time,
+.mic-say-label {
+  font-size: 12.5px;
+}
+
+@keyframes mic-say-pulse {
+  50% {
+    box-shadow: 0 0 0 4px rgba(244, 72, 89, 0.18);
+  }
+}
+
+@container (max-width: 640px) {
+  .composer .mic-say {
+    margin-left: auto;
+  }
+
+  .composer .mic-say + .draft-btn {
+    margin-left: 0;
+  }
+}
+
+/* With its words showing, a voice message keeps the play button beside the waveform */
+.voice:has(.spoken-text) {
+  align-items: flex-start;
+}
+
+/* "Show text" under voice messages and round videos */
+.spoken {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 6px;
+  max-width: 420px;
+}
+
+.spoken-text {
+  margin: 0;
+  padding: 6px 10px;
+  border-left: 2px solid var(--pink);
+  background: rgba(241, 237, 229, 0.05);
+  font-size: 14px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+/* A picture the AI put in a draft: shown before anything is sent */
+.attach-chip.has-thumb {
+  align-items: center;
+}
+
+.attach-thumb {
+  flex-shrink: 0;
+  width: 72px;
+  height: 72px;
+  object-fit: cover;
+  border: 1px solid var(--line-strong);
+}
+
+/* Settings > Voice to text */
+.speech-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.speech-text {
+  flex: 1 1 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mic-say.is-live {
+    animation: none;
+  }
+}

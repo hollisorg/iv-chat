@@ -11,6 +11,7 @@ import { BotKeyboard, InlineButtons } from './tg/BotButtons'
 import { ScheduleDialog, ScheduledList, whenText } from './tg/Scheduling'
 import { LinkCard, Media, PhotoViewer, SafeMessage, formatSize } from './tg/TgMedia'
 import Icon from './tg/Icon'
+import { MicButton, joinInstruction, useDictation } from './Dictate'
 
 export { shortTime }
 
@@ -596,15 +597,17 @@ function Conversation({ dialog, dialogs, ai, draft, onToggleAi, refreshTick }) {
     return () => clearTimeout(t)
   }, [typing])
 
-  // An AI draft fills an empty reply box; if the person is already typing, it waits to be chosen.
+  // An AI draft (text, and maybe a picture) fills an empty reply box; if the person is already typing or has
+  // a file attached, it waits to be chosen.
+  const applyAiDraft = (d) => {
+    setText(d.text || '')
+    if (d.file) setAttachment(d.file)
+    setFromAi(true)
+  }
   useEffect(() => {
     if (!draft) return
-    if (!text.trim()) {
-      setText(draft)
-      setFromAi(true)
-    } else if (draft !== text) {
-      setPendingDraft(draft)
-    }
+    if (!text.trim() && !attachment) applyAiDraft(draft)
+    else if (draft.file || draft.text !== text) setPendingDraft(draft)
     // Only react to new drafts, not to typing.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draft])
@@ -808,14 +811,34 @@ function Conversation({ dialog, dialogs, ai, draft, onToggleAi, refreshTick }) {
     }
   }
 
+  // Saying what you want: the words land in the reply box as the instruction for Draft.
+  const dictation = useDictation({
+    onText: (said) => {
+      setText((t) => joinInstruction(fromAi ? '' : t, said))
+      setFromAi(false)
+      requestAnimationFrame(() => inputRef.current?.focus())
+    },
+    onError: setError
+  })
+
   // The Draft button: the person's own Codex or Claude writes a reply from this chat's recent messages.
-  // Whatever is already typed is passed along as "what I want to say". Nothing is sent.
+  // Whatever is already typed (or being said into the mic) is passed along as "what I want to say".
+  // Nothing is sent.
   const draftWithAi = async () => {
     if (drafting) return window.iv.draft.cancel()
-    setDrafting(true)
+    if (dictation.state === 'starting' || dictation.state === 'working') return
     setError(null)
+    let hint = text.trim()
+    if (dictation.state === 'recording') {
+      const said = await dictation.finish(false)
+      if (!said) return
+      hint = joinInstruction(fromAi ? '' : hint, said)
+      setText(hint)
+      setFromAi(false)
+    }
+    setDrafting(true)
     try {
-      const { text: reply, engine } = await window.iv.draft.telegram(dialog.id, text.trim())
+      const { text: reply, engine } = await window.iv.draft.telegram(dialog.id, hint)
       if (reply) {
         setText(reply)
         setFromAi(true)
@@ -1090,13 +1113,13 @@ function Conversation({ dialog, dialogs, ai, draft, onToggleAi, refreshTick }) {
       <div className="composer">
         {pendingDraft && (
           <div className="draft-banner">
-            <span>Your AI drafted a reply.</span>
+            <span>{pendingDraft.file ? 'Your AI drafted a reply with a picture.' : 'Your AI drafted a reply.'}</span>
             <button
               type="button"
               className="btn btn-quiet"
               onClick={() => {
-                setText(pendingDraft)
-                setFromAi(true)
+                setAttachment(null)
+                applyAiDraft(pendingDraft)
                 setPendingDraft(null)
               }}
             >
@@ -1117,12 +1140,17 @@ function Conversation({ dialog, dialogs, ai, draft, onToggleAi, refreshTick }) {
           </div>
         )}
         {drafting && <p className="draft-note mono">Drafting a reply… click Draft again to stop.</p>}
-        {!drafting && fromAi && text && <p className="draft-note mono">Draft from {draftedBy || 'your AI'}. Edit it, then press Enter to send.</p>}
+        {!drafting && fromAi && (text || attachment) && (
+          <p className="draft-note mono">
+            Draft from {draftedBy || 'your AI'}.{attachment?.fromAi ? ' Check the picture too.' : ''} Edit it, then press Enter to send.
+          </p>
+        )}
         {error && <p className="error">{error}</p>}
         {notice && !error && <p className="notice mono">{notice}</p>}
         {attachment && (
-          <div className="attach-chip">
-            <span className="mono">{attachment.image ? 'Picture' : 'File'}</span>
+          <div className={`attach-chip${attachment.thumb ? ' has-thumb' : ''}`}>
+            {attachment.thumb && <img className="attach-thumb" src={attachment.thumb} alt="The picture that will be sent" />}
+            <span className="mono">{attachment.fromAi ? 'Picture from your AI' : attachment.image ? 'Picture' : 'File'}</span>
             <span className="attach-name">{attachment.name}</span>
             <span className="mono dim">{formatSize(attachment.size)}</span>
             <button type="button" className="attach-remove" onClick={() => setAttachment(null)} aria-label="Remove the attachment">
@@ -1218,6 +1246,7 @@ function Conversation({ dialog, dialogs, ai, draft, onToggleAi, refreshTick }) {
               }
             }}
           />
+          <MicButton dictation={dictation} name="what the reply should say" label="Say" />
           <button type="button" className={`btn draft-btn${drafting ? ' is-busy' : ''}`} onClick={draftWithAi} title={text.trim() ? 'Draft a reply from what you typed, with your AI' : 'Draft a reply with your AI'}>
             <span aria-hidden="true">✨</span> {drafting ? 'Stop' : 'Draft'}
           </button>

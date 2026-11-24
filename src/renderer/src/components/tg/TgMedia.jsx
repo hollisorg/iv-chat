@@ -278,6 +278,7 @@ function Round({ dialogId, m }) {
     window.dispatchEvent(new CustomEvent('iv-audio-play', { detail: v }))
   }
   return (
+    <>
     <div ref={ref} className={`media-round${loud ? ' is-loud' : ''}`} onClick={click} title={loud ? 'Pause' : 'Play with sound'}>
       {src ? (
         <video
@@ -306,6 +307,8 @@ function Round({ dialogId, m }) {
       )}
       <span className="media-badge mono">{loud ? clock(progress * info.duration) : `${clock(info.duration)} 🔇`}</span>
     </div>
+    <SpokenText dialogId={dialogId} m={m} />
+    </>
   )
 }
 
@@ -363,6 +366,52 @@ function GifFile({ dialogId, m }) {
 // ---------- voice and audio ----------
 
 const SPEEDS = [1, 1.5, 2]
+
+// "Show text" under a voice message, round video or audio file: transcribed on this computer (speech.js)
+// and remembered while IV Chat runs. If the person's AI transcribed it first, the text simply appears.
+export function SpokenText({ dialogId, m }) {
+  const [text, setText] = useState(m.transcript)
+  const [open, setOpen] = useState(m.transcript !== undefined)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState(null)
+  useEffect(() => {
+    if (m.transcript === undefined) return
+    setText(m.transcript)
+    setOpen(true)
+  }, [m.transcript])
+  useEffect(
+    () =>
+      window.iv.telegram.onTranscript((t) => {
+        if (String(t.chatId) !== String(dialogId) || t.msgId !== m.id) return
+        setText(t.text)
+        setOpen(true)
+      }),
+    [dialogId, m.id]
+  )
+  const show = async (e) => {
+    e.stopPropagation()
+    if (text !== undefined) return setOpen((o) => !o)
+    setBusy(true)
+    setError(null)
+    try {
+      setText(await window.iv.telegram.transcribe(dialogId, m.id))
+      setOpen(true)
+    } catch (err) {
+      setError(clean(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <div className="spoken" onClick={(e) => e.stopPropagation()}>
+      <button type="button" className="voice-speed mono spoken-btn" onClick={show} disabled={busy} aria-expanded={open}>
+        {busy ? 'Turning it into text…' : open && text !== undefined ? 'Hide text' : 'Show text'}
+      </button>
+      {open && text !== undefined && <p className="spoken-text">{text || <span className="dim">No speech was heard.</span>}</p>}
+      {error && <span className="media-label mono">{error}</span>}
+    </div>
+  )
+}
 
 function AudioMessage({ dialogId, m }) {
   const info = m.media
@@ -497,6 +546,7 @@ function AudioMessage({ dialogId, m }) {
           )}
         </div>
         {error && <span className="media-label mono">{error}</span>}
+        <SpokenText dialogId={dialogId} m={m} />
       </div>
       {src && (
         <audio

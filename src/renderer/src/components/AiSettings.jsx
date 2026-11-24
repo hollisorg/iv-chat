@@ -14,6 +14,8 @@ const TOOL_NAMES = {
   get_updates: 'Checked for new messages',
   read_chat: 'Read a chat',
   search_messages: 'Searched messages',
+  view_photo: 'Looked at a picture',
+  transcribe_voice: 'Read a voice message',
   draft_reply: 'Drafted a reply'
 }
 

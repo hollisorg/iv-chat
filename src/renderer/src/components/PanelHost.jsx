@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef, useState } from 'react'
 import { NAMES } from '../views'
+import { MicButton, joinInstruction, useDictation } from './Dictate'
 
 // The bar above each website panel: drafts a reply to the chat open in that site with the person's own
 // Codex or Claude, and places it in the site's reply box. Nothing is sent; they press Enter there.
@@ -8,13 +9,26 @@ function DraftBar({ service }) {
   const [hint, setHint] = useState('')
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState(null)
+  // Saying what you want instead of typing it (Dictate.jsx).
+  const dictation = useDictation({
+    onText: (said) => setHint((h) => joinInstruction(h, said).slice(0, 500)),
+    onError: (text) => setStatus({ ok: false, text })
+  })
 
   const draft = async () => {
     if (busy) return window.iv.draft.cancel()
-    setBusy(true)
+    if (dictation.state === 'starting' || dictation.state === 'working') return
     setStatus(null)
+    let wanted = hint.trim()
+    if (dictation.state === 'recording') {
+      const said = await dictation.finish(false)
+      if (!said) return
+      wanted = joinInstruction(wanted, said).slice(0, 500)
+      setHint(wanted)
+    }
+    setBusy(true)
     try {
-      const { engine } = await window.iv.draft.panel(service, hint.trim())
+      const { engine } = await window.iv.draft.panel(service, wanted)
       setStatus({ ok: true, text: `Draft from ${engine} is in the reply box. Check it, then press Enter in ${name}.` })
       setHint('')
     } catch (err) {
@@ -34,12 +48,19 @@ function DraftBar({ service }) {
         className="panel-tools-hint"
         value={hint}
         maxLength={500}
-        placeholder="What do you want to say? (optional)"
+        placeholder="What do you want to say? Type it or press the mic (optional)"
         onChange={(e) => setHint(e.target.value)}
         onKeyDown={(e) => e.key === 'Enter' && draft()}
       />
+      <MicButton dictation={dictation} name="what the reply should say" label="Say" />
       <span className={`panel-tools-status mono${status && !status.ok ? ' is-error' : ''}`} role="status">
-        {busy ? `Drafting for the chat open in ${name}…` : status?.text || `Drafts a reply to the chat open in ${name} below`}
+        {busy
+          ? `Drafting for the chat open in ${name}…`
+          : dictation.state === 'recording'
+            ? 'Listening. Press Draft reply when you have said it, or the mic to see the words first.'
+            : dictation.state === 'working'
+              ? 'Turning what you said into text…'
+              : status?.text || `Drafts a reply to the chat open in ${name} below`}
       </span>
     </div>
   )

@@ -48,7 +48,7 @@ export default function App() {
       window.iv.telegram.onCall((c) =>
         setCalls((list) => (c.state === 'ringing' ? [...list.filter((x) => x.id !== c.id), c] : list.filter((x) => x.id !== c.id)))
       ),
-      window.iv.ai.onDraft(({ key, text }) => setDrafts((d) => ({ ...d, [key]: text }))),
+      window.iv.ai.onDraft(({ key, ...draft }) => setDrafts((d) => ({ ...d, [key]: draft }))),
       window.iv.ai.onActivity((activity) => setAiState((s) => (s ? { ...s, activity } : s)))
     ]
     return () => offs.forEach((off) => off())

@@ -10,7 +10,20 @@ const FRESH_MS = 12 * 3600e3
 
 class ToolError extends Error {}
 
-export function createTools({ telegram, whatsapp, getWebChats, getAi, limiter, log, onDraft, now = () => Date.now() }) {
+// What the AI gets for a Telegram message: drawing-only details (waveform bars, text entities) are left out,
+// and voice messages and pictures say which tool opens them.
+function forAi(m) {
+  const { at, entities, body, caption, ...rest } = m
+  const media = m.media ? (({ bars, ...x }) => x)(m.media) : m.media
+  const out = { ...rest, media, time: new Date(at).toISOString() }
+  if (['voice', 'round', 'audio'].includes(media?.kind) && out.transcript === undefined) out.transcript_hint = 'Not transcribed yet: use transcribe_voice with this message id.'
+  if (media?.kind === 'photo' || media?.kind === 'sticker' || media?.preview) out.picture_hint = 'Use view_photo with this message id to see it.'
+  return out
+}
+
+const PHOTO_CAPTION_MAX = 1024
+
+export function createTools({ telegram, whatsapp, getWebChats, getAi, limiter, log, onDraft, speech, stagePhoto, now = () => Date.now() }) {
   // Remembers what get_updates already reported, so each call returns only what's new since the last one.
   const seen = new Map()
   let telegramSince = null
@@ -78,7 +91,7 @@ export function createTools({ telegram, whatsapp, getWebChats, getAi, limiter, l
       const chat = find(chat_id)
       const [service, id] = splitKey(chat_id)
       if (service === 'telegram') {
-        return { chat: show(chat), messages: (await telegram.messages(id, { limit, beforeId: before_id })).map((m) => ({ ...m, at: undefined, time: new Date(m.at).toISOString() })) }
+        return { chat: show(chat), messages: (await telegram.messages(id, { limit, beforeId: before_id })).map(forAi) }
       }
       if (service === 'whatsapp' && whatsapp?.ready()) {
         const res = await whatsapp.read(chat.name, limit)
@@ -111,12 +124,66 @@ export function createTools({ telegram, whatsapp, getWebChats, getAi, limiter, l
       return { results }
     },
 
-    async draft_reply({ chat_id, text } = {}) {
-      const body = String(text ?? '').trim()
-      if (!body) throw new ToolError('The draft is empty.')
-      if (body.length > 4000) throw new ToolError('Drafts are limited to 4000 characters.')
+    // A picture in a Telegram message, passed to the AI as an image it can look at.
+    async view_photo({ chat_id, message_id } = {}) {
       const chat = find(chat_id)
       const [service, id] = splitKey(chat.chat_id)
+      if (service !== 'telegram') throw new ToolError(`Pictures can be opened in Telegram chats for now, not ${NAMES[service]}.`)
+      const msgId = Number(message_id)
+      if (!Number.isInteger(msgId) || msgId <= 0) throw new ToolError('Give the message id from read_chat.')
+      if (!limiter.take('media')) throw new ToolError('Picture and voice limit reached (120 an hour). Wait a while.')
+      let pic
+      try {
+        pic = await telegram.pictureForAi(id, msgId)
+      } catch (err) {
+        throw new ToolError(err?.message || 'That picture could not be loaded.')
+      }
+      return {
+        chat: chat.name,
+        message_id: msgId,
+        kind: pic.kind,
+        from: pic.from,
+        caption: pic.caption,
+        time: new Date(pic.at).toISOString(),
+        image: { data: pic.data, mimeType: pic.mime }
+      }
+    },
+
+    // A Telegram voice message, round video or audio file, turned into text on this computer.
+    async transcribe_voice({ chat_id, message_id } = {}) {
+      const chat = find(chat_id)
+      const [service, id] = splitKey(chat.chat_id)
+      if (service !== 'telegram') throw new ToolError(`Voice messages can be transcribed in Telegram chats for now, not ${NAMES[service]}.`)
+      const msgId = Number(message_id)
+      if (!Number.isInteger(msgId) || msgId <= 0) throw new ToolError('Give the message id from read_chat.')
+      if (!speech) throw new ToolError('Voice to text is not available in this IV Chat.')
+      if (speech.cached(id, msgId) === undefined && !limiter.take('media')) throw new ToolError('Picture and voice limit reached (120 an hour). Wait a while.')
+      try {
+        const r = await speech.telegramMessage(id, msgId)
+        return {
+          chat: chat.name,
+          message_id: msgId,
+          kind: r.kind,
+          from: r.from,
+          seconds: r.seconds,
+          time: r.at ? new Date(r.at).toISOString() : undefined,
+          transcript: r.text,
+          note: r.text ? 'Transcribed on this computer; names and unusual words may be misheard.' : 'No speech was heard in this recording.'
+        }
+      } catch (err) {
+        throw new ToolError(err?.message || 'That recording could not be transcribed.')
+      }
+    },
+
+    async draft_reply({ chat_id, text, photo_path } = {}) {
+      const body = String(text ?? '').trim()
+      const photo = photo_path ? String(photo_path) : ''
+      if (!body && !photo) throw new ToolError('The draft is empty.')
+      if (body.length > 4000) throw new ToolError('Drafts are limited to 4000 characters.')
+      if (photo && body.length > PHOTO_CAPTION_MAX) throw new ToolError(`With a picture, the text is its caption, and Telegram captions are limited to ${PHOTO_CAPTION_MAX} characters.`)
+      const chat = find(chat_id)
+      const [service, id] = splitKey(chat.chat_id)
+      if (photo && service !== 'telegram') throw new ToolError(`Pictures can be added to drafts in Telegram chats for now, not ${NAMES[service]}.`)
       if (service === 'whatsapp') {
         if (!whatsapp?.ready()) throw new ToolError('WhatsApp is not signed in or not readable in IV Chat right now.')
         if (!limiter.take('drafts')) throw new ToolError('Draft limit reached (20 an hour). Wait a while before drafting more.')
@@ -130,9 +197,25 @@ export function createTools({ telegram, whatsapp, getWebChats, getAi, limiter, l
       }
       if (service !== 'telegram') throw new ToolError(`Drafting into ${NAMES[service]} arrives in a later IV Chat update. Show the person the reply instead.`)
       if (!limiter.take('drafts')) throw new ToolError('Draft limit reached (20 an hour). Wait a while before drafting more.')
-      await telegram.saveDraft(id, body)
-      onDraft(chat.chat_id, body)
-      return { status: 'draft placed', chat: chat.name, note: 'The draft is waiting in the reply box in IV Chat and in Telegram. Nothing was sent; the person decides whether to send it.' }
+      let file = null
+      if (photo) {
+        if (!stagePhoto) throw new ToolError('Pictures in drafts are not available in this IV Chat.')
+        try {
+          file = await stagePhoto(photo)
+        } catch (err) {
+          throw new ToolError(err?.message || 'That picture could not be added.')
+        }
+      }
+      if (body) await telegram.saveDraft(id, body)
+      onDraft(chat.chat_id, body, file)
+      return {
+        status: 'draft placed',
+        chat: chat.name,
+        picture: file ? file.name : undefined,
+        note: file
+          ? 'The picture and its caption are waiting in the reply box in IV Chat. Nothing was sent; the person sees the picture and decides whether to send it. Only the caption is saved as a Telegram draft on their other devices.'
+          : 'The draft is waiting in the reply box in IV Chat and in Telegram. Nothing was sent; the person decides whether to send it.'
+      }
     }
   }
 

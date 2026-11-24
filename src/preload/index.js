@@ -69,6 +69,8 @@ contextBridge.exposeInMainWorld('iv', {
     mediaUrl: (id, msgId) => ipcRenderer.invoke('telegram:mediaUrl', id, msgId),
     preview: (id, msgId) => ipcRenderer.invoke('telegram:preview', id, msgId),
     audio: (id, msgId) => ipcRenderer.invoke('telegram:audio', id, msgId),
+    transcribe: (id, msgId) => ipcRenderer.invoke('telegram:transcribe', id, msgId),
+    onTranscript: on('telegram:transcript'),
     react: (id, msgId, emoji) => ipcRenderer.invoke('telegram:react', id, msgId, emoji),
     save: (id, msgId) => ipcRenderer.invoke('telegram:save', id, msgId),
     pickFile: () => ipcRenderer.invoke('telegram:pickFile'),
@@ -78,6 +80,13 @@ contextBridge.exposeInMainWorld('iv', {
     // A dropped file's place on disk (Electron no longer puts it on the File object).
     pathFor: (file) => webUtils.getPathForFile(file),
     sendFile: (id, token, caption, opts) => ipcRenderer.invoke('telegram:sendFile', id, token, caption, opts)
+  },
+  // Voice to text on this computer (src/main/speech.js).
+  speech: {
+    status: () => ipcRenderer.invoke('speech:status'),
+    onStatus: on('speech:status'),
+    setup: () => ipcRenderer.invoke('speech:setup'),
+    instruction: (bytes) => ipcRenderer.invoke('speech:instruction', bytes)
   },
   draft: {
     engines: () => ipcRenderer.invoke('draft:engines'),

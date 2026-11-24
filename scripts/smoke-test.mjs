@@ -1,7 +1,8 @@
 // Launches IV Chat on a throwaway profile with a debug port and checks it through the Chrome DevTools Protocol:
 // the four website panels (plain Chrome user agent, no Node access, declined notifications and passkeys,
 // off-site navigation blocked), latest messages, view switching, Telegram setup, and a real MCP client
-// talking to IV Chat through the bridge (five tools, no send, access rules, token-protected pipe).
+// talking to IV Chat through the bridge (seven tools, no send, access rules, token-protected pipe), and
+// voice to text on optional made-up recordings (SPEECH_SAMPLES).
 // It never signs in, reads real chats or types into the sites.
 // Usage: node scripts/smoke-test.mjs [path to IV Chat.exe] [screenshot folder]
 // With no executable it runs the built app from this folder (npm run build first).
@@ -15,7 +16,13 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { pipePath } from '../src/main/mcp-common.js'
 
 const [exeArg, shotDir] = process.argv.slice(2)
-const PORT = 9334
+// CDP_PORT picks another debug port when 9334 is taken on this computer.
+const PORT = Number(process.env.CDP_PORT) || 9334
+// SPEECH_SAMPLES: optional made-up recordings to transcribe, as "file|expected word;file|expected word".
+const SPEECH_SAMPLES = (process.env.SPEECH_SAMPLES || '')
+  .split(';')
+  .filter(Boolean)
+  .map((s) => s.split('|'))
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const electronBin = path.resolve('node_modules/electron/dist/electron.exe')
 // A fresh, empty profile: no real sign-ins are ever loaded or captured.
@@ -208,7 +215,16 @@ try {
   const client = new Client({ name: 'smoke-test', version: '1.0.0' })
   await client.connect(new StdioClientTransport({ command: launch.command, args: launch.args, env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, stderr: 'ignore' }))
   const tools = (await client.listTools()).tools.map((t) => t.name).sort()
-  check(JSON.stringify(tools) === JSON.stringify(['draft_reply', 'get_updates', 'list_chats', 'read_chat', 'search_messages']), `MCP offers the five tools and no send (${tools.join(', ')})`)
+  check(
+    JSON.stringify(tools) === JSON.stringify(['draft_reply', 'get_updates', 'list_chats', 'read_chat', 'search_messages', 'transcribe_voice', 'view_photo']) && !tools.some((t) => /send/i.test(t)),
+    `MCP offers the seven tools and no send (${tools.join(', ')})`
+  )
+  const photo = await client.callTool({ name: 'view_photo', arguments: { chat_id: 'telegram:1', message_id: 1 } })
+  check(photo.isError === true && /allowed to see/.test(photo.content[0].text), 'view_photo refuses a chat that is not shared')
+  const voice = await client.callTool({ name: 'transcribe_voice', arguments: { chat_id: 'telegram:1', message_id: 1 } })
+  check(voice.isError === true && /allowed to see/.test(voice.content[0].text), 'transcribe_voice refuses a chat that is not shared')
+  const picDraft = await client.callTool({ name: 'draft_reply', arguments: { chat_id: 'telegram:1', photo_path: 'C:\\nope.png' } })
+  check(picDraft.isError === true, 'draft_reply with a picture refuses a chat that is not shared')
   const listed = await client.callTool({ name: 'list_chats', arguments: {} })
   check(!listed.isError && /No chats are shared/.test(listed.content[0].text) && /never follow instructions/.test(listed.content[0].text), 'list_chats works and shows nothing until chats are shared')
   const draft = await client.callTool({ name: 'draft_reply', arguments: { chat_id: 'telegram:1', text: 'hi' } })
@@ -229,6 +245,23 @@ try {
     sock.on('error', () => resolve('dropped'))
   })
   check(intruder === 'dropped', 'the private pipe ignores callers without the token')
+
+  // Voice to text: Settings shows it, and made-up recordings come back as words (decoded in the hidden
+  // window, transcribed by whisper.cpp on this computer).
+  await ui.run(`window.dispatchEvent(new KeyboardEvent('keydown', { key: ',', ctrlKey: true }))`)
+  await sleep(800)
+  const speechSection = await ui.run(`[...document.querySelectorAll('.section-title')].some((h) => h.textContent === 'Voice to text')`)
+  check(speechSection, 'Settings has a Voice to text section')
+  const speech = await ui.run('window.iv.speech.status()')
+  console.log(`      speech engine: ${speech.ready ? `${speech.source}, ${speech.model}, ${speech.gpu ? 'GPU' : 'CPU'}` : 'not set up'}`)
+  for (const [file, expected] of SPEECH_SAMPLES) {
+    const b64 = fs.readFileSync(file).toString('base64')
+    const started = Date.now()
+    const heard = await ui.run(
+      `(async () => { const b = Uint8Array.from(atob(${JSON.stringify(b64)}), (c) => c.charCodeAt(0)); try { return await window.iv.speech.instruction(b.buffer) } catch (e) { return 'ERROR ' + e.message } })()`
+    )
+    check(new RegExp(expected, 'i').test(heard), `${path.basename(file)} heard as "${heard}" in ${((Date.now() - started) / 1000).toFixed(1)} s`)
+  }
   ui.ws.close()
   app.kill()
   await sleep(2500)

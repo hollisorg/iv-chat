@@ -37,8 +37,9 @@ export default function AiGuide({ prefs, onChange }) {
         <li>Pick how you like your replies written.</li>
         <li>Copy the starter message and paste it into a new Codex or Claude chat.</li>
         <li>
-          Then just ask: <i>"What's new?"</i>, <i>"Reply to Sam that I'll be there at 7"</i>, or <i>"Find the address Jo sent me."</i>{' '}
-          Drafts appear in the chat for you to check and send.
+          Then just ask: <i>"What's new?"</i>, <i>"Reply to Sam that I'll be there at 7"</i>, <i>"What did Jo say in that voice message?"</i>{' '}
+          or <i>"Put the poster on my Desktop in a reply to Ana."</i> In Telegram it can look at pictures, read voice messages as text and put
+          a picture in a draft. Drafts appear in the chat for you to check and send.
         </li>
       </ol>
 

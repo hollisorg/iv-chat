@@ -3,6 +3,7 @@ import AiSettings from './AiSettings'
 import DeviceSettings from './DeviceSettings'
 import Hero from './Hero'
 import NewsletterBox from './NewsletterBox'
+import SpeechSettings from './SpeechSettings'
 
 function Toggle({ label, hint, checked, onChange }) {
   return (
@@ -98,6 +99,8 @@ export default function Settings({ settings, services, update, onChange, telegra
         chats={chats}
         prefs={settings.replyPrefs}
       />
+
+      <SpeechSettings />
 
       <h2 className="section-title">App</h2>
       <ul className="rows">

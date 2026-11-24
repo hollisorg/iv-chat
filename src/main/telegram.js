@@ -35,6 +35,7 @@ export class TelegramService extends EventEmitter {
     this.updates = [] // incoming messages since start, newest last
     this.passwordWaiter = null
     this.previews = new Map() // "chat:message" -> data URL of a photo or thumbnail, kept in memory
+    this.transcripts = new Map() // "chat:message" -> text of a voice or round message, kept in memory (transcribe.js)
     this.avatars = new Map() // chat id -> Promise of a profile picture data URL (or null)
     this.found = new Map() // chat id -> entity, from New chat searches
     this.folders = []
@@ -325,8 +326,13 @@ export class TelegramService extends EventEmitter {
       }
     }
     const d = this.dialogs.get(peerId(id))
+    const chat = peerId(id)
     return list
-      .map((m) => this.item(m, here, d))
+      .map((m) => {
+        const it = this.item(m, here, d)
+        const said = this.transcripts.get(`${chat}:${m.id}`)
+        return said === undefined ? it : { ...it, transcript: said }
+      })
       .sort((a, b) => a.id - b.id)
   }
 
@@ -678,6 +684,44 @@ export class TelegramService extends EventEmitter {
     this.previews.set(key, url)
     if (this.previews.size > MAX_PREVIEWS) this.previews.delete(this.previews.keys().next().value)
     return url
+  }
+
+  // A picture for the person's AI to look at (MCP view_photo): a photo at up to about 1280 px, a sticker, or
+  // the thumbnail of a video, GIF, round video or file. Kept in memory only.
+  async pictureForAi(id, msgId) {
+    const msg = await this.message(id, msgId)
+    const info = mediaInfo(msg)
+    const webPhoto = msg.media?.className === 'MessageMediaWebPage' ? msg.media.webpage?.photo : null
+    let buf
+    let mime = 'image/jpeg'
+    let kind = info?.kind || (webPhoto ? 'link preview' : null)
+    if (info?.kind === 'photo' || webPhoto) {
+      const sizes = (webPhoto || msg.media.photo)?.sizes || []
+      const pick = ['y', 'x', 'm'].map((t) => sizes.findIndex((s) => s.type === t)).find((i) => i >= 0)
+      buf = await this.client.downloadMedia(msg, { thumb: pick ?? sizes.length - 1 })
+      if (webPhoto) kind = 'link preview'
+    } else if (info?.kind === 'sticker' && info.mime === 'image/webp') {
+      buf = await this.client.downloadMedia(msg, {})
+      mime = 'image/webp'
+    } else if (info?.preview && msg.media?.document?.thumbs?.length) {
+      buf = await this.client.downloadMedia(msg, { thumb: msg.media.document.thumbs.length - 1 })
+      kind = `${info.kind} thumbnail`
+    }
+    if (!Buffer.isBuffer(buf) || !buf.length) throw new Error('That message has no picture to look at')
+    if (buf.length > 5 * 1024 * 1024) throw new Error('That picture is too large to pass along')
+    return { data: buf.toString('base64'), mime, kind, caption: msg.message || '', from: senderName(msg, this.me), at: msg.date * 1000 }
+  }
+
+  // The audio of a voice message, round video or audio file, for transcribing (transcribe.js). In memory only.
+  async speechSource(id, msgId) {
+    const msg = await this.message(id, msgId)
+    const info = mediaInfo(msg)
+    if (!['voice', 'round', 'audio'].includes(info?.kind)) throw new Error('That message is not a voice message, round video or audio file')
+    if (info.duration > 15 * 60) throw new Error('That recording is longer than 15 minutes, too long to transcribe here')
+    if (info.size > 60 * 1024 * 1024) throw new Error('That recording is too large to transcribe here')
+    const buf = await this.client.downloadMedia(msg, {})
+    if (!Buffer.isBuffer(buf) || !buf.length) throw new Error('The recording could not be loaded')
+    return { bytes: buf, kind: info.kind, seconds: info.duration, from: senderName(msg, this.me), at: msg.date * 1000 }
   }
 
   // A voice message or audio file to play in IV Chat, loaded on demand into memory (not saved to disk).

@@ -21,6 +21,8 @@ import * as connectors from './connectors.js'
 import { createWhatsApp } from './whatsapp.js'
 import { buildDraftPrompt, findEngines, pickEngine, runDraft } from './ai-draft.js'
 import { flattenDraft } from './whatsapp-parse.js'
+import { Speech } from './speech.js'
+import { copyPicture } from './ai-photo.js'
 
 // Tests run against a throwaway profile so they never touch real sign-ins (scripts/smoke-test.mjs).
 if (process.env.IV_CHAT_PROFILE) app.setPath('userData', process.env.IV_CHAT_PROFILE)
@@ -50,10 +52,11 @@ let updater = null
 let quitting = false
 let activeView = 'updates'
 let telegram = null
+let speech = null // voice to text (speech.js)
 let unlock = 'ok' // 'locked' while the saved sign-ins can't be opened; see unlockAtStart()
 let borrowed = null // { app } when started inside another app's package; see unlockAtStart()
 const activity = [] // the AI's recent tool calls, without message text; memory only
-const aiDrafts = {} // chat key -> latest AI draft, shown in the Telegram reply box
+const aiDrafts = {} // chat key -> latest AI draft { text, file, at }, shown in the Telegram reply box
 const pickedFiles = new Map() // token -> file the person picked to send in Telegram
 
 // The window is destroyed while quitting, but panels and Telegram can still fire events for a moment.
@@ -102,6 +105,8 @@ function createWindow() {
   })
 
   // Closing hides to the tray so messages keep arriving; Quit lives in the tray menu.
+  // The hidden audio decoder is a window too; it must not keep IV Chat open once this one has gone.
+  win.on('closed', () => speech?.stop())
   win.on('close', (e) => {
     if (quitting || !settings.closeToTray) return
     e.preventDefault()
@@ -157,7 +162,7 @@ function guardOwnMedia(ses) {
       cancelId: 1,
       title: 'IV Chat',
       message: `IV Chat wants to use your ${what}.`,
-      detail: 'For Telegram voice messages and the device tests in Settings. This lasts until IV Chat is closed. To decide for good, choose Allow or Block in Settings > Calls and devices.'
+      detail: 'For Telegram voice messages, saying what a Draft should say, and the device tests in Settings. This lasts until IV Chat is closed. To decide for good, choose Allow or Block in Settings > Calls and devices.'
     })
     ownMediaGrant = response === 0
     callback(ownMediaGrant)
@@ -409,6 +414,22 @@ function registerIpc() {
     await telegram.reactFromPerson(tgId(id), Number(msgId), value)
   })
   ipcMain.handle('telegram:audio', (_e, id, msgId) => telegram.audio(tgId(id), Number(msgId)))
+  // Voice to text: "Show text" under a voice message, and the person's spoken instruction for Draft.
+  ipcMain.handle('telegram:transcribe', async (e, id, msgId) => {
+    fromWindow(e)
+    return (await speech.telegramMessage(tgId(id), Number(msgId))).text
+  })
+  ipcMain.handle('speech:instruction', async (e, bytes) => {
+    fromWindow(e)
+    const buf = Buffer.from(bytes)
+    if (!buf.length || buf.length > 10 * 1024 * 1024) throw new Error('That recording is too long. Keep instructions under a few minutes.')
+    return (await speech.transcribeBytes(buf)).text
+  })
+  ipcMain.handle('speech:status', () => speech.status())
+  ipcMain.handle('speech:setup', (e) => {
+    fromWindow(e)
+    return speech.install()
+  })
   ipcMain.handle('telegram:save', async (_e, id, msgId) => {
     const msg = await telegram.message(tgId(id), Number(msgId))
     const { canceled, filePath } = await dialog.showSaveDialog(win, {
@@ -731,18 +752,31 @@ function startAi() {
     whatsapp: createWhatsApp(panels),
     getWebChats: () => panels.chatsSnapshot(),
     getAi: () => settings.ai,
-    limiter: new RateLimiter({ calls: { max: 60, windowMs: 60e3 }, drafts: { max: 20, windowMs: 3600e3 } }),
+    limiter: new RateLimiter({ calls: { max: 60, windowMs: 60e3 }, drafts: { max: 20, windowMs: 3600e3 }, media: { max: 120, windowMs: 3600e3 } }),
+    speech,
+    // A picture the AI attaches to a Telegram draft: copied, then staged like the person's own picks, so
+    // the window gets only a token, a name and a small preview, and only the person's Send sends it.
+    stagePhoto: async (filePath) => {
+      const id = crypto.randomUUID()
+      const copy = copyPicture(filePath, path.join(app.getPath('temp'), 'iv-chat-uploads'), id)
+      pickedFiles.set(id, copy.path)
+      let thumb = null
+      const img = nativeImage.createFromPath(copy.path)
+      if (!img.isEmpty()) thumb = img.resize({ width: Math.min(480, img.getSize().width) }).toDataURL()
+      else if (copy.size <= 3 * 1024 * 1024) thumb = `data:${copy.mime};base64,${fs.readFileSync(copy.path).toString('base64')}`
+      return { token: id, name: copy.name, size: copy.size, image: true, thumb, fromAi: true }
+    },
     log: (entry) => {
       activity.push(entry)
       if (activity.length > 200) activity.shift()
       send('ai:activity', activity.slice(-50).reverse())
     },
-    onDraft: (key, text) => {
+    onDraft: (key, text, file = null) => {
       const service = key.slice(0, key.indexOf(':'))
       // Telegram drafts also fill IV Chat's own reply box; WhatsApp drafts are already in WhatsApp's.
       if (service === 'telegram') {
-        aiDrafts[key] = text
-        send('ai:draft', { key, text })
+        aiDrafts[key] = { text, file, at: Date.now() }
+        send('ai:draft', { key, ...aiDrafts[key] })
       }
       const name = service === 'whatsapp' ? 'WhatsApp' : 'Telegram'
       if (settings.notifications && !inFront(service)) {
@@ -841,6 +875,9 @@ app.whenReady().then(() => {
   settings = loadSettings()
   unlockAtStart()
   startTelegram()
+  speech = new Speech({ telegram })
+  speech.on('status', (s) => send('speech:status', s))
+  speech.on('transcript', (t) => send('telegram:transcript', t))
   const media = new MediaCache(path.join(app.getPath('temp'), 'iv-chat-media'), (chatId, msgId) => telegram.mediaSource(String(chatId).slice(0, 40), msgId))
   protocol.handle(MEDIA_SCHEME, (request) => media.respond(request))
   registerIpc()
@@ -856,6 +893,7 @@ app.whenReady().then(() => {
 app.on('before-quit', () => {
   quitting = true
   telegram?.disconnect()
+  speech?.stop()
 })
 
 // The window only really closes when quitting (or when close-to-tray is off).

@@ -103,6 +103,9 @@ function ChatMenu({ at, d, onClose, onError }) {
 function ChatRow({ d, active, ai, drafts, onOpen, onMenu }) {
   const key = chatKey('telegram', d.id)
   const badge = d.unread > 0 ? d.unread : d.unreadMark ? '' : null
+  // An AI draft is { text, file }; a picture on its own reads as "Picture".
+  const draft = drafts[key]
+  const draftText = draft ? draft.text || (draft.file ? 'Picture' : '') : ''
   return (
     <li>
       <button
@@ -126,8 +129,8 @@ function ChatRow({ d, active, ai, drafts, onOpen, onMenu }) {
             {aiCanSee(ai, key) && <span className="ai-dot" title="Your AI can see this chat" />}
           </span>
           <span className="latest-preview dim">
-            {drafts[key] ? <span className="accent">Draft: </span> : null}
-            {drafts[key] || d.preview}
+            {draftText ? <span className="accent">{draft.file && draft.text ? 'Draft with picture: ' : 'Draft: '}</span> : null}
+            {draftText || d.preview}
           </span>
         </span>
         <span className="latest-meta">
